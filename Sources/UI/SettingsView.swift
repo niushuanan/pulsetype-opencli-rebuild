@@ -381,19 +381,14 @@ struct SettingsView: View {
                     clearAction()
                 }
                 .controlCenterSecondaryActionButton()
-            }
-            .padding(.bottom, 10)
-
-            HStack {
                 Button(isTesting ? "测试中" : "测试连接") {
                     testAction()
                 }
-                .controlCenterPrimaryActionButton()
+                .controlCenterSecondaryActionButton()
                 .disabled(isTesting || validationMessage != nil)
-
-                Spacer()
             }
-            .padding(.bottom, 8)
+            .padding(.bottom, 10)
+            .padding(.top, 2)
 
             if let validationMessage {
                 Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
