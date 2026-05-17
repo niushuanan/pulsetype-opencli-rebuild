@@ -9,7 +9,7 @@ struct HomeMetricCard: View {
     var tintColor: Color = PulseUI.ColorTokens.glow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
                 Text(title)
                     .font(PulseUI.Typography.captionStrong)
@@ -32,10 +32,10 @@ struct HomeMetricCard: View {
                 .pulsePrimaryText()
             Text(subtitle)
                 .font(PulseUI.Typography.caption)
-                .pulseTertiaryText()
+                .pulseSecondaryText()
+                .lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 84, alignment: .topLeading)
         .padding(14)
         .controlCenterInsetPanel()
     }

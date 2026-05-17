@@ -177,7 +177,7 @@ struct SettingsView: View {
             HomeMetricCard(
                 title: "成稿字数",
                 value: HomeStatsFormatter.integerText(controlCenterState.homeStatsSnapshot.totalInputCharacters),
-                subtitle: "文字模型整理后的最终文本",
+                subtitle: "DeepSeek 处理后的最终文本",
                 symbolName: "text.alignleft"
             )
             HomeMetricCard(
