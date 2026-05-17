@@ -217,6 +217,7 @@ struct SettingsView: View {
                             Text(modifier.displayName).tag(modifier)
                         }
                     }
+                    .labelsHidden()
                     .frame(maxWidth: 180, alignment: .leading)
                     .pickerStyle(.menu)
                 }
