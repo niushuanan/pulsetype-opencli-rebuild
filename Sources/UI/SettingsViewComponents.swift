@@ -52,7 +52,7 @@ struct HistoryRowView: View {
             if let outputText = entry.outputText,
                outputText.trimmingCharacters(in: .whitespacesAndNewlines) != entry.inputText.trimmingCharacters(in: .whitespacesAndNewlines),
                !entry.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("ASR 原文：\(entry.inputText)")
+                Text(entry.inputText)
                     .font(PulseUI.Typography.caption)
                     .pulseSecondaryText()
                     .fixedSize(horizontal: false, vertical: true)
