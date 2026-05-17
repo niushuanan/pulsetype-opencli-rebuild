@@ -171,7 +171,12 @@ final class ProviderSettingsStore: ObservableObject {
 
     @discardableResult
     func saveASRAPIKeyDraft() -> Bool {
-        saveAPIKey(
+        let normalizedDraft = asrAPIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedDraft.isEmpty, asrCredentialState == .saved {
+            showASRFeedback("语音识别 API 密钥已存在，无需重复保存。")
+            return true
+        }
+        return saveAPIKey(
             draft: asrAPIKeyDraft,
             keyRef: asrConfig.keyRef,
             roleName: "语音识别",
@@ -191,7 +196,12 @@ final class ProviderSettingsStore: ObservableObject {
 
     @discardableResult
     func saveTextAPIKeyDraft() -> Bool {
-        saveAPIKey(
+        let normalizedDraft = textAPIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedDraft.isEmpty, textCredentialState == .saved {
+            showTextFeedback("文字处理模型 API 密钥已存在，无需重复保存。")
+            return true
+        }
+        return saveAPIKey(
             draft: textAPIKeyDraft,
             keyRef: textConfig.keyRef,
             roleName: "文字处理模型",
