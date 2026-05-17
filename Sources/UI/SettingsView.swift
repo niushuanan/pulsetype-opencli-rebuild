@@ -162,6 +162,7 @@ struct SettingsView: View {
             .padding(.vertical, PulseUI.Spacing.pageVertical)
         }
         .onAppear {
+            enforceSingleKeyWakeMode()
             hotkeyStateStore.refresh()
         }
     }
@@ -201,58 +202,28 @@ struct SettingsView: View {
                 .font(PulseUI.Typography.sectionTitle)
                 .padding(.bottom, 10)
 
-            HStack(alignment: .center) {
-                Text("开始方式")
+            HStack(spacing: 10) {
+                Text("开始/结束说话")
                     .font(PulseUI.Typography.bodyStrong)
                 Spacer()
-                Picker("开始方式", selection: wakeTriggerModeBinding) {
-                    ForEach(HotkeyTriggerMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode)
+                Picker("开始/结束说话", selection: wakeModifierBinding) {
+                    ForEach(HotkeyModifier.allCases) { modifier in
+                        Text(modifier.displayName).tag(modifier)
                     }
                 }
                 .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(width: 250)
+                .frame(width: 180, alignment: .trailing)
+                .pickerStyle(.menu)
             }
             .padding(.vertical, 10)
 
             Divider()
 
-            if hotkeyStateStore.wakeTriggerMode == .modifierTap {
-                HStack(spacing: 10) {
-                    Text("单键")
-                        .font(PulseUI.Typography.bodyStrong)
-                    Spacer()
-                    Picker("单键", selection: wakeModifierBinding) {
-                        ForEach(HotkeyModifier.allCases) { modifier in
-                            Text(modifier.displayName).tag(modifier)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 180, alignment: .trailing)
-                    .pickerStyle(.menu)
-                }
-                .padding(.vertical, 10)
-            } else {
-                HStack {
-                    Text("组合键")
-                        .font(PulseUI.Typography.bodyStrong)
-                    Spacer()
-                    KeyboardShortcuts.Recorder("", name: .wakeSession)
-                        .frame(width: 220)
-                }
-                .padding(.vertical, 10)
-            }
-
-            Divider()
-
             HStack {
-                Text("取消会话")
+                Text("退出输入")
                     .font(PulseUI.Typography.bodyStrong)
                 Spacer()
-                Text("Esc")
-                    .font(PulseUI.Typography.monospacedMeta)
-                    .pulseSecondaryText()
+                fixedHotkeyValue("Esc")
             }
             .padding(.vertical, 10)
 
@@ -508,6 +479,28 @@ struct SettingsView: View {
             get: { hotkeyStateStore.wakeModifier },
             set: { _ = hotkeyStateStore.setModifier($0, for: .wakeSession) }
         )
+    }
+
+    private func fixedHotkeyValue(_ text: String) -> some View {
+        Text(text)
+            .font(PulseUI.Typography.bodyStrong)
+            .pulseSecondaryText()
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: PulseUI.Radius.compactCard, style: .continuous)
+                    .fill(Color.primary.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: PulseUI.Radius.compactCard, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+    }
+
+    private func enforceSingleKeyWakeMode() {
+        if hotkeyStateStore.wakeTriggerMode != .modifierTap {
+            _ = hotkeyStateStore.setTriggerMode(.modifierTap, for: .wakeSession)
+        }
     }
 
     private func testASRConnection() {

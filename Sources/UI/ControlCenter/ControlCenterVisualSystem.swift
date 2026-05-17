@@ -75,7 +75,7 @@ enum PulseUI {
         static let textPrimary = Color.primary
         static let textSecondary = Color.primary.opacity(0.66)
         static let textTertiary = Color.primary.opacity(0.52)
-        static let success = Color(nsColor: NSColor(calibratedRed: 0.24, green: 0.55, blue: 0.42, alpha: 1))
+        static let success = Color(nsColor: .systemBlue)
         static let warning = Color(nsColor: NSColor(calibratedRed: 0.76, green: 0.49, blue: 0.15, alpha: 1))
         static let danger = Color(nsColor: NSColor(calibratedRed: 0.72, green: 0.29, blue: 0.27, alpha: 1))
 

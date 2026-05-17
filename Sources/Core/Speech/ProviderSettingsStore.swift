@@ -532,7 +532,10 @@ final class ProviderSettingsStore: ObservableObject {
 
     private static func decodeTextProcessingPrompt(from value: String?) -> String {
         let normalized = normalizedPrompt(value ?? "")
-        return normalized.isEmpty ? defaultTextProcessingPrompt : normalized
+        if normalized.isEmpty || normalized == legacyDefaultTextProcessingPrompt {
+            return defaultTextProcessingPrompt
+        }
+        return normalized
     }
 
     private static func decodeConnectionTestResult(from data: Data?) -> ConnectionTestResult? {
@@ -610,12 +613,25 @@ final class ProviderSettingsStore: ObservableObject {
         prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static let defaultTextProcessingPrompt = """
+    private static let legacyDefaultTextProcessingPrompt = """
 请把 ASR 原文整理成可以直接写入输入框的简体中文成稿：
 1. 删掉口头禅、重复词和明显识别噪声。
 2. 修正明显错别字，补齐标点和必要分段。
 3. 不扩写，不编造，不改变事实和语气。
 4. 专有名词、数字、时间、英文、代码、文件名尽量保留原样。
 5. 只输出最终文本，不要解释。
+"""
+
+    static let defaultTextProcessingPrompt = """
+你是 PulseType 的语音输入整理助手。输入来自用户口述后的 ASR 原文，目标是整理成可以直接写入当前输入框的最终文本。
+
+处理要求：
+1. 删除口头禅、重复词、停顿词和明显识别噪声。
+2. 修正明显错别字，补齐中文标点。
+3. 根据语义自动分行、分点、分段，让结果有清晰结构。
+4. 如果用户在口述中表达了并列事项、步骤、原因、结论、待办、问题清单，请优先整理成分点列表。
+5. 保留用户原本的事实、语气和意图，不扩写，不编造。
+6. 专有名词、数字、时间、英文、代码、文件名尽量保留原样。
+7. 只输出最终文本，不要解释你的处理过程。
 """
 }
