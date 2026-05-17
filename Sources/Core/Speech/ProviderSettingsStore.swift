@@ -53,6 +53,10 @@ final class ProviderSettingsStore: ObservableObject {
     private let defaultsTextPromptKey = "providers.text.prompt.v1"
     private let defaultsLatestASRTestResultKey = "providers.asr.test.result.v1"
     private let defaultsLatestTextTestResultKey = "providers.text.test.result.v1"
+    private var asrFeedbackClearWorkItem: DispatchWorkItem?
+    private var textFeedbackClearWorkItem: DispatchWorkItem?
+    private var asrTestResultClearWorkItem: DispatchWorkItem?
+    private var textTestResultClearWorkItem: DispatchWorkItem?
 
     init(
         defaults: UserDefaults = .standard,
@@ -69,16 +73,14 @@ final class ProviderSettingsStore: ObservableObject {
         self.textProcessingPrompt = Self.decodeTextProcessingPrompt(
             from: defaults.string(forKey: defaultsTextPromptKey)
         )
-        self.latestASRTestResult = Self.decodeConnectionTestResult(
-            from: defaults.data(forKey: defaultsLatestASRTestResultKey)
-        )
-        self.latestTextTestResult = Self.decodeConnectionTestResult(
-            from: defaults.data(forKey: defaultsLatestTextTestResultKey)
-        )
+        self.latestASRTestResult = nil
+        self.latestTextTestResult = nil
 
         persistASRConfig()
         persistTextConfig()
         persistTextProcessingPrompt()
+        defaults.removeObject(forKey: defaultsLatestASRTestResultKey)
+        defaults.removeObject(forKey: defaultsLatestTextTestResultKey)
         refreshCredentialState(allowUserInteraction: false)
     }
 
@@ -177,12 +179,12 @@ final class ProviderSettingsStore: ObservableObject {
             onSuccess: { [weak self] in
                 self?.asrAPIKeyDraft = ""
                 self?.asrCredentialState = .saved
-                self?.asrFeedbackMessage = "语音识别 API 密钥已保存。"
+                self?.showASRFeedback("语音识别 API 密钥已保存。")
                 self?.clearASRTestResult()
             },
             onFailure: { [weak self] state, message in
                 self?.asrCredentialState = state
-                self?.asrFeedbackMessage = message
+                self?.showASRFeedback(message)
             }
         )
     }
@@ -197,12 +199,12 @@ final class ProviderSettingsStore: ObservableObject {
             onSuccess: { [weak self] in
                 self?.textAPIKeyDraft = ""
                 self?.textCredentialState = .saved
-                self?.textFeedbackMessage = "文字处理模型 API 密钥已保存。"
+                self?.showTextFeedback("文字处理模型 API 密钥已保存。")
                 self?.clearTextTestResult()
             },
             onFailure: { [weak self] state, message in
                 self?.textCredentialState = state
-                self?.textFeedbackMessage = message
+                self?.showTextFeedback(message)
             }
         )
     }
@@ -214,10 +216,10 @@ final class ProviderSettingsStore: ObservableObject {
             roleName: "语音识别",
             onSuccess: { [weak self] in
                 self?.asrCredentialState = .missing
-                self?.asrFeedbackMessage = "语音识别 API 密钥已删除。"
+                self?.showASRFeedback("语音识别 API 密钥已删除。")
                 self?.clearASRTestResult()
             },
-            onFailure: { [weak self] message in self?.asrFeedbackMessage = message }
+            onFailure: { [weak self] message in self?.showASRFeedback(message) }
         )
     }
 
@@ -228,10 +230,10 @@ final class ProviderSettingsStore: ObservableObject {
             roleName: "文字处理模型",
             onSuccess: { [weak self] in
                 self?.textCredentialState = .missing
-                self?.textFeedbackMessage = "文字处理模型 API 密钥已删除。"
+                self?.showTextFeedback("文字处理模型 API 密钥已删除。")
                 self?.clearTextTestResult()
             },
-            onFailure: { [weak self] message in self?.textFeedbackMessage = message }
+            onFailure: { [weak self] message in self?.showTextFeedback(message) }
         )
     }
 
@@ -303,12 +305,12 @@ final class ProviderSettingsStore: ObservableObject {
 
     func recordASRTestResult(_ result: ConnectionTestResult) {
         latestASRTestResult = result
-        persistLatestASRTestResult()
+        scheduleASRTestResultClear()
     }
 
     func recordTextTestResult(_ result: ConnectionTestResult) {
         latestTextTestResult = result
-        persistLatestTextTestResult()
+        scheduleTextTestResultClear()
     }
 
     private func resolvedTranscriptionConfiguration() -> SpeechProviderConfiguration? {
@@ -388,32 +390,12 @@ final class ProviderSettingsStore: ObservableObject {
         )
     }
 
-    private func persistLatestASRTestResult() {
-        guard let latestASRTestResult else {
-            defaults.removeObject(forKey: defaultsLatestASRTestResultKey)
-            return
-        }
-        if let data = try? JSONEncoder().encode(latestASRTestResult) {
-            defaults.set(data, forKey: defaultsLatestASRTestResultKey)
-        }
-    }
-
-    private func persistLatestTextTestResult() {
-        guard let latestTextTestResult else {
-            defaults.removeObject(forKey: defaultsLatestTextTestResultKey)
-            return
-        }
-        if let data = try? JSONEncoder().encode(latestTextTestResult) {
-            defaults.set(data, forKey: defaultsLatestTextTestResultKey)
-        }
-    }
-
     private func clearASRTestResult() {
         guard latestASRTestResult != nil else {
             return
         }
         latestASRTestResult = nil
-        persistLatestASRTestResult()
+        asrTestResultClearWorkItem?.cancel()
     }
 
     private func clearTextTestResult() {
@@ -421,7 +403,61 @@ final class ProviderSettingsStore: ObservableObject {
             return
         }
         latestTextTestResult = nil
-        persistLatestTextTestResult()
+        textTestResultClearWorkItem?.cancel()
+    }
+
+    private func showASRFeedback(_ message: String) {
+        asrFeedbackMessage = message
+        scheduleASRFeedbackClear()
+    }
+
+    private func showTextFeedback(_ message: String) {
+        textFeedbackMessage = message
+        scheduleTextFeedbackClear()
+    }
+
+    private func scheduleASRFeedbackClear() {
+        asrFeedbackClearWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.asrFeedbackMessage = nil
+            }
+        }
+        asrFeedbackClearWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: workItem)
+    }
+
+    private func scheduleTextFeedbackClear() {
+        textFeedbackClearWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.textFeedbackMessage = nil
+            }
+        }
+        textFeedbackClearWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: workItem)
+    }
+
+    private func scheduleASRTestResultClear() {
+        asrTestResultClearWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.latestASRTestResult = nil
+            }
+        }
+        asrTestResultClearWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: workItem)
+    }
+
+    private func scheduleTextTestResultClear() {
+        textTestResultClearWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.latestTextTestResult = nil
+            }
+        }
+        textTestResultClearWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: workItem)
     }
 
     private func saveAPIKey(

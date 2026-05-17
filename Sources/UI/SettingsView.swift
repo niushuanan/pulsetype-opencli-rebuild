@@ -278,6 +278,7 @@ struct SettingsView: View {
                     ),
                     apiKeyDraft: $providerSettingsStore.asrAPIKeyDraft,
                     credentialState: providerSettingsStore.asrCredentialState,
+                    feedbackMessage: providerSettingsStore.asrFeedbackMessage,
                     validationMessage: providerSettingsStore.asrConfigurationValidationMessage,
                     latestResult: providerSettingsStore.latestASRTestResult,
                     isTesting: asrTesting,
@@ -297,6 +298,7 @@ struct SettingsView: View {
                     ),
                     apiKeyDraft: $providerSettingsStore.textAPIKeyDraft,
                     credentialState: providerSettingsStore.textCredentialState,
+                    feedbackMessage: providerSettingsStore.textFeedbackMessage,
                     validationMessage: providerSettingsStore.textConfigurationValidationMessage,
                     latestResult: providerSettingsStore.latestTextTestResult,
                     isTesting: textTesting,
@@ -347,6 +349,7 @@ struct SettingsView: View {
         modelName: Binding<String>,
         apiKeyDraft: Binding<String>,
         credentialState: ProviderSettingsStore.CredentialState,
+        feedbackMessage: String?,
         validationMessage: String?,
         latestResult: ConnectionTestResult?,
         isTesting: Bool,
@@ -404,10 +407,10 @@ struct SettingsView: View {
                     .padding(.bottom, 6)
             }
 
-            if credentialState == .saved {
-                Text("密钥已保存")
+            if let feedbackMessage {
+                Label(feedbackMessage, systemImage: feedbackIconName(for: credentialState))
                     .font(PulseUI.Typography.caption)
-                    .foregroundStyle(PulseUI.ColorTokens.success)
+                    .foregroundStyle(feedbackColor(for: credentialState))
             }
         }
         .padding(14)
@@ -421,7 +424,25 @@ struct SettingsView: View {
                 systemImage: result.status == .success ? "checkmark.circle.fill" : "xmark.octagon.fill"
             )
             .font(PulseUI.Typography.caption)
-            .foregroundStyle(result.status == .success ? PulseUI.ColorTokens.success : PulseUI.ColorTokens.danger)
+            .foregroundStyle(result.status == .success ? PulseUI.ColorTokens.textSecondary : PulseUI.ColorTokens.danger)
+        }
+    }
+
+    private func feedbackIconName(for state: ProviderSettingsStore.CredentialState) -> String {
+        switch state {
+        case .failed, .inaccessible, .missing:
+            return "exclamationmark.circle.fill"
+        default:
+            return "checkmark.circle.fill"
+        }
+    }
+
+    private func feedbackColor(for state: ProviderSettingsStore.CredentialState) -> Color {
+        switch state {
+        case .failed, .inaccessible, .missing:
+            return PulseUI.ColorTokens.danger
+        default:
+            return PulseUI.ColorTokens.textSecondary
         }
     }
 
