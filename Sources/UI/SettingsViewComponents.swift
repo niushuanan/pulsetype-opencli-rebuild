@@ -49,12 +49,20 @@ struct HistoryRowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
 
-            if let outputText = entry.outputText,
-               outputText.trimmingCharacters(in: .whitespacesAndNewlines) != entry.inputText.trimmingCharacters(in: .whitespacesAndNewlines),
-               !entry.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(entry.inputText)
+            if let secondaryText = secondaryText {
+                Text(secondaryText)
                     .font(PulseUI.Typography.caption)
                     .pulseSecondaryText()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+
+            if entry.mode == .agent,
+               let evidenceText = entry.agentEvidenceSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !evidenceText.isEmpty {
+                Text("证据：\(evidenceText)")
+                    .font(PulseUI.Typography.caption)
+                    .pulseTertiaryText()
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
@@ -64,13 +72,13 @@ struct HistoryRowView: View {
                     .font(PulseUI.Typography.monospacedMeta)
                     .pulseTertiaryText()
                 Spacer()
-                Button("复制结果") {
+                Button(primaryCopyTitle) {
                     onCopyPrimary()
                 }
                 .controlCenterSecondaryActionButton()
-                .disabled((entry.outputText ?? entry.inputText).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(primaryCopyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-                Button("复制原文") {
+                Button(rawCopyTitle) {
                     onCopyRaw()
                 }
                 .controlCenterSecondaryActionButton()
@@ -85,15 +93,52 @@ struct HistoryRowView: View {
     }
 
     private var primaryText: String {
+        if entry.mode == .agent,
+           entry.status != .success,
+           let failure = entry.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !failure.isEmpty {
+            return failure
+        }
+
         let output = entry.outputText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !output.isEmpty {
             return output
         }
         let input = entry.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !input.isEmpty {
-            return input
+            return entry.mode == .agent ? "已收到 Agent 指令，正在等待执行结果。" : input
         }
         return entry.errorMessage ?? "暂无文本"
+    }
+
+    private var secondaryText: String? {
+        let input = entry.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if entry.mode == .agent {
+            guard !input.isEmpty else {
+                return nil
+            }
+            return "命令：\(input)"
+        }
+
+        guard let outputText = entry.outputText,
+              outputText.trimmingCharacters(in: .whitespacesAndNewlines) != input,
+              !input.isEmpty
+        else {
+            return nil
+        }
+        return input
+    }
+
+    private var primaryCopyTitle: String {
+        entry.mode == .agent ? "复制结果" : "复制结果"
+    }
+
+    private var primaryCopyText: String {
+        entry.outputText ?? entry.errorMessage ?? entry.inputText
+    }
+
+    private var rawCopyTitle: String {
+        entry.mode == .agent ? "复制命令" : "复制原文"
     }
 
     private var statusTitle: String {

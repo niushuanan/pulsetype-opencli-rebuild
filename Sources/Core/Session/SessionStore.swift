@@ -13,7 +13,7 @@ enum SessionHUDProgressHint {
 final class SessionStore: ObservableObject {
     @Published private(set) var phase: SessionPhase = .idle
     @Published private(set) var activeLane: InputLane = .directDictation
-    @Published private(set) var statusMessage: String = "已准备，可开始普通听写。"
+    @Published private(set) var statusMessage: String = "已准备，可开始普通听写或 Agent 执行。"
     @Published private(set) var hudProgressHint: Double = SessionHUDProgressHint.idle
     @Published private(set) var errorMessage: String?
     @Published private(set) var listeningLevel: Double = 0
@@ -34,11 +34,39 @@ final class SessionStore: ObservableObject {
     ]
 
     func startDictation() {
+        startSession(lane: .directDictation)
+    }
+
+    func startAgentMusic() {
+        startSession(lane: .agentMusic)
+    }
+
+    func markAgentExecuting() {
+        transition(
+            to: .textProcessing,
+            statusMessage: "Agent 正在执行音乐命令。",
+            hudProgressHint: SessionHUDProgressHint.textTransform
+        )
+    }
+
+    func completeAgentExecution(message: String) {
+        pendingClip = nil
+        listeningLevel = 0
+        transition(
+            to: .idle,
+            statusMessage: message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Agent 执行已完成。"
+                : message,
+            hudProgressHint: SessionHUDProgressHint.done
+        )
+    }
+
+    private func startSession(lane: InputLane) {
         clearRuntimeArtifactsForNewSession()
-        activeLane = .directDictation
+        activeLane = lane
         transition(
             to: .listening,
-            statusMessage: "正在听写，完成后会自动交给文字模型整理。",
+            statusMessage: lane.listeningStatusMessage,
             hudProgressHint: SessionHUDProgressHint.idle
         )
     }
@@ -144,9 +172,12 @@ final class SessionStore: ObservableObject {
     }
 
     func cancel() {
+        let lane = activeLane
         clearRuntimeArtifactsForNewSession()
         phase = .cancelled
-        statusMessage = "本次听写已取消，目标应用内容未变化。"
+        statusMessage = lane == .agentMusic
+            ? "本次 Agent 执行已取消，Music 不会再继续处理。"
+            : "本次听写已取消，目标应用内容未变化。"
         hudProgressHint = SessionHUDProgressHint.idle
     }
 
@@ -161,7 +192,7 @@ final class SessionStore: ObservableObject {
     func reset() {
         clearRuntimeArtifactsForNewSession()
         phase = .idle
-        statusMessage = "已准备，可开始普通听写。"
+        statusMessage = "已准备，可开始普通听写或 Agent 执行。"
         hudProgressHint = SessionHUDProgressHint.idle
     }
 

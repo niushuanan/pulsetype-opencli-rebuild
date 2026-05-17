@@ -1,5 +1,10 @@
 import Foundation
 
+enum SessionHistoryMode: String, Codable, Equatable {
+    case dictation
+    case agent
+}
+
 enum SessionHistoryStatus: String, Codable, Equatable {
     case success
     case failed
@@ -9,6 +14,7 @@ enum SessionHistoryStatus: String, Codable, Equatable {
 enum LocalHistoryFilter: String, CaseIterable, Identifiable {
     case all
     case dictation
+    case agent
     case failed
 
     var id: String { rawValue }
@@ -19,6 +25,8 @@ enum LocalHistoryFilter: String, CaseIterable, Identifiable {
             return "全部"
         case .dictation:
             return "普通听写"
+        case .agent:
+            return "Agent 调用"
         case .failed:
             return "失败"
         }
@@ -28,6 +36,7 @@ enum LocalHistoryFilter: String, CaseIterable, Identifiable {
 struct SessionHistoryEntry: Identifiable, Codable, Equatable {
     let id: UUID
     let timestamp: Date
+    let mode: SessionHistoryMode
     let appName: String
     let bundleID: String
     let inputText: String
@@ -36,6 +45,7 @@ struct SessionHistoryEntry: Identifiable, Codable, Equatable {
     let transcriptionModel: String?
     let textProcessingProvider: String?
     let textProcessingModel: String?
+    let agentEvidenceSummary: String?
     let outputPath: TextOutputPath?
     let status: SessionHistoryStatus
     let errorMessage: String?
@@ -44,6 +54,7 @@ struct SessionHistoryEntry: Identifiable, Codable, Equatable {
     init(
         id: UUID = UUID(),
         timestamp: Date = Date(),
+        mode: SessionHistoryMode = .dictation,
         appName: String,
         bundleID: String,
         inputText: String,
@@ -52,6 +63,7 @@ struct SessionHistoryEntry: Identifiable, Codable, Equatable {
         transcriptionModel: String? = nil,
         textProcessingProvider: String? = nil,
         textProcessingModel: String? = nil,
+        agentEvidenceSummary: String? = nil,
         outputPath: TextOutputPath? = nil,
         status: SessionHistoryStatus,
         errorMessage: String? = nil,
@@ -59,6 +71,7 @@ struct SessionHistoryEntry: Identifiable, Codable, Equatable {
     ) {
         self.id = id
         self.timestamp = timestamp
+        self.mode = mode
         self.appName = appName
         self.bundleID = bundleID
         self.inputText = inputText
@@ -67,10 +80,70 @@ struct SessionHistoryEntry: Identifiable, Codable, Equatable {
         self.transcriptionModel = transcriptionModel
         self.textProcessingProvider = textProcessingProvider
         self.textProcessingModel = textProcessingModel
+        self.agentEvidenceSummary = agentEvidenceSummary
         self.outputPath = outputPath
         self.status = status
         self.errorMessage = errorMessage
         self.audioDurationSeconds = audioDurationSeconds
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case timestamp
+        case mode
+        case appName
+        case bundleID
+        case inputText
+        case outputText
+        case transcriptionProvider
+        case transcriptionModel
+        case textProcessingProvider
+        case textProcessingModel
+        case agentEvidenceSummary
+        case outputPath
+        case status
+        case errorMessage
+        case audioDurationSeconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
+        mode = try container.decodeIfPresent(SessionHistoryMode.self, forKey: .mode) ?? .dictation
+        appName = try container.decodeIfPresent(String.self, forKey: .appName) ?? "未知应用"
+        bundleID = try container.decodeIfPresent(String.self, forKey: .bundleID) ?? "unknown.bundle"
+        inputText = try container.decodeIfPresent(String.self, forKey: .inputText) ?? ""
+        outputText = try container.decodeIfPresent(String.self, forKey: .outputText)
+        transcriptionProvider = try container.decodeIfPresent(String.self, forKey: .transcriptionProvider)
+        transcriptionModel = try container.decodeIfPresent(String.self, forKey: .transcriptionModel)
+        textProcessingProvider = try container.decodeIfPresent(String.self, forKey: .textProcessingProvider)
+        textProcessingModel = try container.decodeIfPresent(String.self, forKey: .textProcessingModel)
+        agentEvidenceSummary = try container.decodeIfPresent(String.self, forKey: .agentEvidenceSummary)
+        outputPath = try container.decodeIfPresent(TextOutputPath.self, forKey: .outputPath)
+        status = try container.decodeIfPresent(SessionHistoryStatus.self, forKey: .status) ?? .success
+        errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+        audioDurationSeconds = try container.decodeIfPresent(Double.self, forKey: .audioDurationSeconds)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(appName, forKey: .appName)
+        try container.encode(bundleID, forKey: .bundleID)
+        try container.encode(inputText, forKey: .inputText)
+        try container.encodeIfPresent(outputText, forKey: .outputText)
+        try container.encodeIfPresent(transcriptionProvider, forKey: .transcriptionProvider)
+        try container.encodeIfPresent(transcriptionModel, forKey: .transcriptionModel)
+        try container.encodeIfPresent(textProcessingProvider, forKey: .textProcessingProvider)
+        try container.encodeIfPresent(textProcessingModel, forKey: .textProcessingModel)
+        try container.encodeIfPresent(agentEvidenceSummary, forKey: .agentEvidenceSummary)
+        try container.encodeIfPresent(outputPath, forKey: .outputPath)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(errorMessage, forKey: .errorMessage)
+        try container.encodeIfPresent(audioDurationSeconds, forKey: .audioDurationSeconds)
     }
 }
 
@@ -149,8 +222,12 @@ final class LocalHistoryStore: ObservableObject {
 
     func entries(matching filter: LocalHistoryFilter) -> [SessionHistoryEntry] {
         switch filter {
-        case .all, .dictation:
+        case .all:
             return entries
+        case .dictation:
+            return entries.filter { $0.mode == .dictation }
+        case .agent:
+            return entries.filter { $0.mode == .agent }
         case .failed:
             return entries.filter { $0.status == .failed }
         }
@@ -198,8 +275,13 @@ final class LocalHistoryStore: ObservableObject {
 
         if let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             return array.compactMap { raw in
-                if let mode = raw["mode"] as? String, mode != "dictation" {
-                    return nil
+                if let mode = raw["mode"] as? String {
+                    let normalized = mode.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if normalized != SessionHistoryMode.dictation.rawValue,
+                       normalized != SessionHistoryMode.agent.rawValue
+                    {
+                        return nil
+                    }
                 }
                 guard let itemData = try? JSONSerialization.data(withJSONObject: raw) else {
                     return nil
@@ -224,7 +306,7 @@ final class LocalHistoryStore: ObservableObject {
         var timedCharacters = 0
         var speedSamples = 0
 
-        for entry in entries where entry.status == .success {
+        for entry in entries where entry.status == .success && entry.mode == .dictation {
             let text = (entry.outputText ?? entry.inputText).trimmingCharacters(in: .whitespacesAndNewlines)
             totalCharacters += text.count
             if let duration = entry.audioDurationSeconds, duration > 0 {

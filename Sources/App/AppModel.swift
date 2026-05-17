@@ -234,6 +234,13 @@ final class AppModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        sessionStore.$activeLane
+            .removeDuplicates()
+            .sink { [weak self] lane in
+                self?.globalHotkeyService.updateInputLane(lane)
+            }
+            .store(in: &cancellables)
+
         hotkeyStateStore.$cancelTriggerMode
             .removeDuplicates()
             .sink { [weak self] _ in

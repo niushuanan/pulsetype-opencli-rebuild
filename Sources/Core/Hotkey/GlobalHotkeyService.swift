@@ -91,6 +91,7 @@ final class GlobalHotkeyService {
     private var cancellables = Set<AnyCancellable>()
     private var hasActivated = false
     private var currentSessionPhase: SessionPhase = .idle
+    private var currentInputLane: InputLane = .directDictation
     private var globalFlagsMonitor: Any?
     private var localFlagsMonitor: Any?
     private var globalKeyDownMonitor: Any?
@@ -101,6 +102,12 @@ final class GlobalHotkeyService {
     )
     private var wakeHoldWorkItem: DispatchWorkItem?
     private var wakeHoldSessionActive = false
+    private var agentPressStateMachine = WakeModifierPressStateMachine(
+        holdInterval: 0.18,
+        tapInterval: 0.7
+    )
+    private var agentHoldWorkItem: DispatchWorkItem?
+    private var agentHoldSessionActive = false
 
     init(
         interactionCoordinator: InteractionCoordinator,
@@ -154,7 +161,12 @@ final class GlobalHotkeyService {
         currentSessionPhase = phase
         if phase != .listening {
             wakeHoldSessionActive = false
+            agentHoldSessionActive = false
         }
+    }
+
+    func updateInputLane(_ lane: InputLane) {
+        currentInputLane = lane
     }
 
     func refreshRuntimeState() {
@@ -213,18 +225,22 @@ final class GlobalHotkeyService {
             self.localKeyDownMonitor = nil
         }
         clearWakeHoldCheck()
+        clearAgentHoldCheck()
         wakePressStateMachine.reset()
+        agentPressStateMachine.reset()
         wakeHoldSessionActive = false
+        agentHoldSessionActive = false
     }
 
     private func handleFlagsChanged(_ event: NSEvent) {
-        guard hotkeyStateStore.wakeTriggerMode == .modifierTap else {
+        if hotkeyStateStore.wakeTriggerMode == .modifierTap {
+            processWakeModifierEvent(event)
+        } else {
             clearWakeHoldCheck()
             wakePressStateMachine.reset()
             wakeHoldSessionActive = false
-            return
         }
-        processWakeModifierEvent(event)
+        processAgentModifierEvent(event)
     }
 
     private func processWakeModifierEvent(_ event: NSEvent) {
@@ -316,6 +332,29 @@ final class GlobalHotkeyService {
         wakeHoldWorkItem = nil
     }
 
+    private func scheduleAgentHoldCheck() {
+        clearAgentHoldCheck()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else {
+                return
+            }
+            self.agentHoldWorkItem = nil
+            let action = self.agentPressStateMachine.evaluateHold(at: Date())
+            self.handleAgentPressAction(action)
+        }
+        agentHoldWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + agentPressStateMachine.holdInterval,
+            execute: workItem
+        )
+    }
+
+    private func clearAgentHoldCheck() {
+        agentHoldWorkItem?.cancel()
+        agentHoldWorkItem = nil
+    }
+
     private func handleWakePressAction(_ action: WakeModifierPressAction) {
         switch action {
         case .none:
@@ -333,7 +372,7 @@ final class GlobalHotkeyService {
         guard shouldHandleWakeTap else {
             return
         }
-        interactionCoordinator.handleWakeInput()
+        interactionCoordinator.handleWakeInput(context: .dictation)
     }
 
     private func handleWakeModifierHoldBegan() {
@@ -341,7 +380,7 @@ final class GlobalHotkeyService {
             return
         }
         wakeHoldSessionActive = true
-        interactionCoordinator.handleWakeInput()
+        interactionCoordinator.handleWakeInput(context: .dictationHold)
     }
 
     private func handleWakeModifierHoldEnded() {
@@ -359,6 +398,9 @@ final class GlobalHotkeyService {
     private func registerForeignInput() {
         if wakePressStateMachine.isPressed {
             wakePressStateMachine.registerForeignInput()
+        }
+        if agentPressStateMachine.isPressed {
+            agentPressStateMachine.registerForeignInput()
         }
     }
 
@@ -385,6 +427,111 @@ final class GlobalHotkeyService {
         case .listening, .transcribing, .textProcessing, .inserting:
             return true
         case .idle, .cancelled, .error:
+            return false
+        }
+    }
+
+    private func processAgentModifierEvent(_ event: NSEvent) {
+        let modifier = hotkeyStateStore.agentModifier
+        let trackedFlags: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+        let activeFlags = event.modifierFlags.intersection(trackedFlags)
+        let isTargetKeyEvent = event.keyCode == modifier.keyCode
+        let isFamilyPressed = activeFlags.contains(modifier.modifierFlags)
+        let hasOtherModifierFamilies = !activeFlags.subtracting(modifier.modifierFlags).isEmpty
+
+        if !isTargetKeyEvent, event.keyCode == 0 {
+            let now = Date()
+            if isFamilyPressed, !agentPressStateMachine.isPressed {
+                agentPressStateMachine.beginPress(
+                    at: now,
+                    hasForeignInput: hasOtherModifierFamilies
+                )
+                scheduleAgentHoldCheck()
+                return
+            }
+            if !isFamilyPressed, agentPressStateMachine.isPressed {
+                clearAgentHoldCheck()
+                let action = agentPressStateMachine.endPress(
+                    at: now,
+                    hasOtherModifierFamilies: hasOtherModifierFamilies,
+                    sameFamilyStillPressed: isFamilyPressed
+                )
+                handleAgentPressAction(action)
+                return
+            }
+        }
+
+        if isTargetKeyEvent {
+            let now = Date()
+            if !agentPressStateMachine.isPressed {
+                agentPressStateMachine.beginPress(
+                    at: now,
+                    hasForeignInput: hasOtherModifierFamilies
+                )
+                scheduleAgentHoldCheck()
+                return
+            }
+
+            clearAgentHoldCheck()
+            let action = agentPressStateMachine.endPress(
+                at: now,
+                hasOtherModifierFamilies: hasOtherModifierFamilies,
+                sameFamilyStillPressed: isFamilyPressed
+            )
+            handleAgentPressAction(action)
+            return
+        }
+
+        guard agentPressStateMachine.isPressed else {
+            return
+        }
+
+        if HotkeyModifier.from(keyCode: event.keyCode) != nil {
+            agentPressStateMachine.registerForeignInput()
+        }
+
+        if !activeFlags.contains(modifier.modifierFlags) {
+            clearAgentHoldCheck()
+            agentPressStateMachine.reset()
+            agentHoldSessionActive = false
+        }
+    }
+
+    private func handleAgentPressAction(_ action: WakeModifierPressAction) {
+        switch action {
+        case .none, .tap:
+            break
+        case .holdBegan:
+            handleAgentModifierHoldBegan()
+        case .holdEnded:
+            handleAgentModifierHoldEnded()
+        }
+    }
+
+    private func handleAgentModifierHoldBegan() {
+        guard canStartAgentHoldSession else {
+            return
+        }
+        agentHoldSessionActive = true
+        interactionCoordinator.handleWakeInput(context: .agentHold)
+    }
+
+    private func handleAgentModifierHoldEnded() {
+        guard agentHoldSessionActive else {
+            return
+        }
+        agentHoldSessionActive = false
+        guard currentSessionPhase == .listening, currentInputLane == .agentMusic else {
+            return
+        }
+        interactionCoordinator.handleStopInput()
+    }
+
+    private var canStartAgentHoldSession: Bool {
+        switch currentSessionPhase {
+        case .idle, .cancelled, .error:
+            return true
+        case .listening, .transcribing, .textProcessing, .inserting:
             return false
         }
     }

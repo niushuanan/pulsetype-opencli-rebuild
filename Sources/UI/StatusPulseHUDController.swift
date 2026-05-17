@@ -167,12 +167,20 @@ struct HUDProgressStateMachine {
 }
 
 enum StatusPulseHUDTitleResolver {
-    static func listeningTitle(for _: InputLane) -> String {
-        "语音输入"
+    static func listeningTitle(for lane: InputLane) -> String {
+        switch lane {
+        case .directDictation:
+            return "语音输入"
+        case .agentMusic:
+            return "Agent 执行"
+        }
     }
 
     static func textProcessingTitle(from message: String) -> String {
         let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.contains("Agent 正在执行") {
+            return "Agent 执行中"
+        }
         let prefix = "听写整理中："
         guard normalized.hasPrefix(prefix) else {
             return "整理中"

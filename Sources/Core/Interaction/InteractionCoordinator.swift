@@ -15,6 +15,7 @@ final class InteractionCoordinator {
     private let speechPipelineLogger: SpeechPipelineLogger
     private let toastPresenter: ToastPresenter?
     private let dictationPostProcessor: DictationPostProcessor
+    private let agentMusicExecutor: any AgentMusicControlling
 
     private var cancellables = Set<AnyCancellable>()
     private var transcriptionTask: Task<Void, Never>?
@@ -33,7 +34,8 @@ final class InteractionCoordinator {
         localHistoryStore: LocalHistoryStore,
         speechPipelineLogger: SpeechPipelineLogger,
         toastPresenter: ToastPresenter? = nil,
-        dictationPostProcessor: DictationPostProcessor = LLMDictationPostProcessor()
+        dictationPostProcessor: DictationPostProcessor = LLMDictationPostProcessor(),
+        agentMusicExecutor: (any AgentMusicControlling)? = nil
     ) {
         self.sessionStore = sessionStore
         self.permissionsCenter = permissionsCenter
@@ -46,21 +48,22 @@ final class InteractionCoordinator {
         self.speechPipelineLogger = speechPipelineLogger
         self.toastPresenter = toastPresenter
         self.dictationPostProcessor = dictationPostProcessor
+        self.agentMusicExecutor = agentMusicExecutor ?? AgentMusicControlExecutor()
         bindListeningLevel()
         bindExternalAppTracking()
     }
 
-    func handleWakeInput(context _: WakeInvocationContext = .dictation) {
+    func handleWakeInput(context: WakeInvocationContext = .dictation) {
         permissionsCenter.refreshStatuses()
 
         switch sessionStore.phase {
         case .idle, .cancelled, .error:
             discardPendingClipIfNeeded()
             guard permissionsCenter.snapshot.canStartVoiceSession else {
-                sessionStore.fail(message: "开始听写前，需要先允许麦克风权限。")
+                sessionStore.fail(message: "开始语音输入前，需要先允许麦克风权限。")
                 return
             }
-            startRecording()
+            startRecording(lane: context.lane)
         case .listening:
             handleStopInput()
         case .transcribing, .textProcessing, .inserting:
@@ -72,6 +75,7 @@ final class InteractionCoordinator {
         guard sessionStore.phase == .listening else {
             return
         }
+        let lane = sessionStore.activeLane
         let configuration = providerSettingsStore.configuration
         let traceID = ensureTraceID()
         sessionStore.markTranscribing()
@@ -80,7 +84,7 @@ final class InteractionCoordinator {
             let clip = try audioCaptureService.stopRecording()
             speechPipelineLogger.log(
                 traceID: traceID,
-                lane: .directDictation,
+                lane: lane,
                 provider: configuration.providerName,
                 model: configuration.modelName,
                 httpStatus: nil,
@@ -95,11 +99,11 @@ final class InteractionCoordinator {
                 providerName: configuration.providerName,
                 modelName: configuration.modelName
             )
-            startTranscription(for: clip)
+            startTranscription(for: clip, lane: lane)
         } catch {
             speechPipelineLogger.log(
                 traceID: traceID,
-                lane: .directDictation,
+                lane: lane,
                 provider: configuration.providerName,
                 model: configuration.modelName,
                 httpStatus: nil,
@@ -117,6 +121,7 @@ final class InteractionCoordinator {
             return
         }
 
+        let lane = sessionStore.activeLane
         let focusContext = contextDetector.focusedAppContext()
         let latestInput = sessionStore.latestTranscription?.transcript ?? ""
         let clipDuration = sessionStore.pendingClip?.duration
@@ -134,18 +139,19 @@ final class InteractionCoordinator {
 
         localHistoryStore.append(
             SessionHistoryEntry(
+                mode: historyMode(for: lane),
                 appName: focusContext.appName,
                 bundleID: focusContext.bundleID,
                 inputText: latestInput,
                 outputText: nil,
                 status: .cancelled,
-                errorMessage: "用户取消了当前听写。",
+                errorMessage: lane == .agentMusic ? "用户取消了当前 Agent 执行。" : "用户取消了当前听写。",
                 audioDurationSeconds: clipDuration
             )
         )
         speechPipelineLogger.log(
             traceID: traceID,
-            lane: .directDictation,
+            lane: lane,
             provider: nil,
             model: nil,
             httpStatus: nil,
@@ -168,18 +174,22 @@ final class InteractionCoordinator {
         currentTraceID = nil
     }
 
-    private func startRecording() {
+    private func startRecording(lane: InputLane) {
         let configuration = providerSettingsStore.configuration
         let traceID = UUID().uuidString
         currentTraceID = traceID
-        currentDictationTarget = resolveDictationWritebackTarget()
+        currentDictationTarget = lane == .directDictation ? resolveDictationWritebackTarget() : nil
 
         do {
             try audioCaptureService.startRecording()
-            sessionStore.startDictation()
+            if lane == .agentMusic {
+                sessionStore.startAgentMusic()
+            } else {
+                sessionStore.startDictation()
+            }
             speechPipelineLogger.log(
                 traceID: traceID,
-                lane: .directDictation,
+                lane: lane,
                 provider: configuration.providerName,
                 model: configuration.modelName,
                 httpStatus: nil,
@@ -190,7 +200,7 @@ final class InteractionCoordinator {
             sessionStore.fail(message: "无法开始录音：\(error.localizedDescription)")
             speechPipelineLogger.log(
                 traceID: traceID,
-                lane: .directDictation,
+                lane: lane,
                 provider: configuration.providerName,
                 model: configuration.modelName,
                 httpStatus: nil,
@@ -211,7 +221,7 @@ final class InteractionCoordinator {
         }
     }
 
-    private func startTranscription(for clip: RecordedAudioClip) {
+    private func startTranscription(for clip: RecordedAudioClip, lane: InputLane) {
         transcriptionTask?.cancel()
         transcriptionTask = Task { [weak self] in
             guard let self else {
@@ -243,8 +253,8 @@ final class InteractionCoordinator {
 
                 let request = SpeechTranscriptionRequest(
                     clip: clip,
-                    lane: .directDictation,
-                    contextSummary: "lane=directDictation"
+                    lane: lane,
+                    contextSummary: "lane=\(lane.rawValue)"
                 )
 
                 let outcome = try await transcribeWithRetryOnInvalidResponse(
@@ -252,6 +262,7 @@ final class InteractionCoordinator {
                     request: request,
                     configuration: configuration,
                     apiKey: loaded,
+                    lane: lane,
                     traceID: traceID
                 )
                 guard !Task.isCancelled else {
@@ -263,7 +274,7 @@ final class InteractionCoordinator {
                 sessionStore.completeTranscription(result: outcome.result)
                 speechPipelineLogger.log(
                     traceID: traceID,
-                    lane: .directDictation,
+                    lane: lane,
                     provider: outcome.result.providerName,
                     model: outcome.result.modelName,
                     httpStatus: nil,
@@ -272,7 +283,14 @@ final class InteractionCoordinator {
                     audioDuration: clip.duration,
                     transcriptLength: outcome.result.transcript.count
                 )
-                await outputDictationTranscript(outcome.result, audioDurationSeconds: clip.duration)
+                if lane == .agentMusic {
+                    await executeAgentMusicCommand(
+                        transcription: outcome.result,
+                        audioDurationSeconds: clip.duration
+                    )
+                } else {
+                    await outputDictationTranscript(outcome.result, audioDurationSeconds: clip.duration)
+                }
             } catch let failure as ASRTranscriptionFailure {
                 guard !Task.isCancelled else {
                     return
@@ -281,6 +299,7 @@ final class InteractionCoordinator {
                     failure.error,
                     attempts: failure.attempts,
                     clip: clip,
+                    lane: lane,
                     configuration: resolvedConfiguration,
                     traceID: traceID
                 )
@@ -294,6 +313,7 @@ final class InteractionCoordinator {
                     speechError,
                     attempts: 1,
                     clip: clip,
+                    lane: lane,
                     configuration: resolvedConfiguration,
                     traceID: traceID
                 )
@@ -305,6 +325,7 @@ final class InteractionCoordinator {
                     .providerFailure(description: error.localizedDescription),
                     attempts: 1,
                     clip: clip,
+                    lane: lane,
                     configuration: resolvedConfiguration,
                     traceID: traceID
                 )
@@ -317,12 +338,13 @@ final class InteractionCoordinator {
         request: SpeechTranscriptionRequest,
         configuration: SpeechProviderConfiguration,
         apiKey: String,
+        lane: InputLane,
         traceID: String
     ) async throws -> ASRTranscriptionOutcome {
         for attempt in 1...2 {
             speechPipelineLogger.log(
                 traceID: traceID,
-                lane: .directDictation,
+                lane: lane,
                 provider: configuration.providerName,
                 model: configuration.modelName,
                 httpStatus: nil,
@@ -341,7 +363,7 @@ final class InteractionCoordinator {
             } catch let speechError as SpeechTranscriptionError {
                 speechPipelineLogger.log(
                     traceID: traceID,
-                    lane: .directDictation,
+                    lane: lane,
                     provider: configuration.providerName,
                     model: configuration.modelName,
                     httpStatus: SpeechTranscriptionErrorPresentation.httpStatus(from: speechError),
@@ -353,7 +375,7 @@ final class InteractionCoordinator {
                 if case .invalidResponse = speechError, attempt == 1 {
                     speechPipelineLogger.log(
                         traceID: traceID,
-                        lane: .directDictation,
+                        lane: lane,
                         provider: configuration.providerName,
                         model: configuration.modelName,
                         httpStatus: nil,
@@ -369,7 +391,7 @@ final class InteractionCoordinator {
                 let wrapped = SpeechTranscriptionError.providerFailure(description: error.localizedDescription)
                 speechPipelineLogger.log(
                     traceID: traceID,
-                    lane: .directDictation,
+                    lane: lane,
                     provider: configuration.providerName,
                     model: configuration.modelName,
                     httpStatus: SpeechTranscriptionErrorPresentation.httpStatus(from: wrapped),
@@ -389,6 +411,7 @@ final class InteractionCoordinator {
         _ error: SpeechTranscriptionError,
         attempts: Int,
         clip: RecordedAudioClip,
+        lane: InputLane,
         configuration: SpeechProviderConfiguration?,
         traceID: String
     ) {
@@ -403,6 +426,7 @@ final class InteractionCoordinator {
         let focusContext = contextDetector.focusedAppContext()
         localHistoryStore.append(
             SessionHistoryEntry(
+                mode: historyMode(for: lane),
                 appName: focusContext.appName,
                 bundleID: focusContext.bundleID,
                 inputText: "",
@@ -416,7 +440,7 @@ final class InteractionCoordinator {
         )
         speechPipelineLogger.log(
             traceID: traceID,
-            lane: .directDictation,
+            lane: lane,
             provider: configuration?.providerName,
             model: configuration?.modelName,
             httpStatus: SpeechTranscriptionErrorPresentation.httpStatus(from: error),
@@ -426,6 +450,96 @@ final class InteractionCoordinator {
             audioDuration: clip.duration
         )
         sessionStore.fail(message: message)
+        currentTraceID = nil
+    }
+
+    private func executeAgentMusicCommand(
+        transcription: SpeechTranscriptionResult,
+        audioDurationSeconds: TimeInterval
+    ) async {
+        let traceID = ensureTraceID()
+        let focusContext = contextDetector.focusedAppContext()
+        let commandText = transcription.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !commandText.isEmpty else {
+            let message = "没有识别到可执行的音乐指令。"
+            localHistoryStore.append(
+                SessionHistoryEntry(
+                    mode: .agent,
+                    appName: focusContext.appName,
+                    bundleID: focusContext.bundleID,
+                    inputText: transcription.transcript,
+                    outputText: nil,
+                    transcriptionProvider: transcription.providerName,
+                    transcriptionModel: transcription.modelName,
+                    textProcessingProvider: providerSettingsStore.textProcessingConfiguration.providerName,
+                    textProcessingModel: providerSettingsStore.textProcessingConfiguration.modelName,
+                    agentEvidenceSummary: "apple.music.control|fast_path=true|error=empty_command",
+                    status: .failed,
+                    errorMessage: message,
+                    audioDurationSeconds: audioDurationSeconds
+                )
+            )
+            speechPipelineLogger.log(
+                traceID: traceID,
+                lane: .agentMusic,
+                provider: transcription.providerName,
+                model: transcription.modelName,
+                httpStatus: nil,
+                stage: "agent.music.failed",
+                errorType: "emptyCommand",
+                detail: message,
+                audioDuration: audioDurationSeconds,
+                transcriptLength: transcription.transcript.count
+            )
+            sessionStore.fail(message: message)
+            currentTraceID = nil
+            return
+        }
+
+        sessionStore.markAgentExecuting()
+        let outcome = await agentMusicExecutor.execute(
+            AgentMusicExecutionRequest(
+                traceID: traceID,
+                command: commandText
+            )
+        )
+
+        localHistoryStore.append(
+            SessionHistoryEntry(
+                mode: .agent,
+                appName: focusContext.appName,
+                bundleID: focusContext.bundleID,
+                inputText: transcription.transcript,
+                outputText: outcome.outputText,
+                transcriptionProvider: transcription.providerName,
+                transcriptionModel: transcription.modelName,
+                textProcessingProvider: providerSettingsStore.textProcessingConfiguration.providerName,
+                textProcessingModel: providerSettingsStore.textProcessingConfiguration.modelName,
+                agentEvidenceSummary: outcome.evidenceSummary,
+                status: outcome.status,
+                errorMessage: outcome.status == .failed ? outcome.message : nil,
+                audioDurationSeconds: audioDurationSeconds
+            )
+        )
+
+        speechPipelineLogger.log(
+            traceID: traceID,
+            lane: .agentMusic,
+            provider: transcription.providerName,
+            model: transcription.modelName,
+            httpStatus: nil,
+            stage: outcome.status == .success ? "agent.music.success" : "agent.music.failed",
+            detail: outcome.evidenceSummary,
+            audioDuration: audioDurationSeconds,
+            transcriptLength: transcription.transcript.count
+        )
+
+        if outcome.status == .success {
+            sessionStore.completeAgentExecution(message: outcome.message)
+        } else {
+            sessionStore.fail(message: outcome.message)
+        }
         currentTraceID = nil
     }
 
@@ -492,6 +606,7 @@ final class InteractionCoordinator {
             )
             localHistoryStore.append(
                 SessionHistoryEntry(
+                    mode: .dictation,
                     appName: focusContext.appName,
                     bundleID: focusContext.bundleID,
                     inputText: transcription.transcript,
@@ -661,6 +776,7 @@ final class InteractionCoordinator {
         let message = actionableOutputMessage(for: error, focusContext: focusContext)
         localHistoryStore.append(
             SessionHistoryEntry(
+                mode: .dictation,
                 appName: focusContext.appName,
                 bundleID: focusContext.bundleID,
                 inputText: transcription.transcript,
@@ -749,6 +865,10 @@ final class InteractionCoordinator {
         }
         audioCaptureService.removeClip(at: clip.fileURL)
         sessionStore.clearPendingClipReference()
+    }
+
+    private func historyMode(for lane: InputLane) -> SessionHistoryMode {
+        lane == .agentMusic ? .agent : .dictation
     }
 
     private func bindListeningLevel() {

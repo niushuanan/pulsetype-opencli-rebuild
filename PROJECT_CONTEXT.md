@@ -33,6 +33,34 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 01:08 - 新增独立 Agent 音乐层（长按触发 + 历史分栏 + Apple Music 快路径）
+
+- 本次任务：在不接入 planner 的前提下，新增一层独立 Agent 功能，只做音乐控制，并保持现有普通听写链路不受影响。
+- 改了哪些文件：
+  - `Sources/Core/Session/InputLane.swift`
+  - `Sources/Core/Session/SessionStore.swift`
+  - `Sources/Core/Hotkey/HotkeyStateStore.swift`
+  - `Sources/Core/Hotkey/GlobalHotkeyService.swift`
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `Sources/Core/Interaction/InteractionCoordinator.swift`
+  - `Sources/Core/History/LocalHistoryStore.swift`
+  - `Sources/UI/SettingsView.swift`
+  - `Sources/UI/SettingsViewComponents.swift`
+  - `Sources/UI/StatusPulseHUDController.swift`
+  - `Sources/App/AppModel.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+- 改了什么：
+  - 新增 `agentMusic` lane，并把会话状态、HUD 标题、历史数据模型扩展为“普通听写 / Agent 调用”双模式。
+  - 设置页快捷键新增“开启Agent”键位选择（长按触发）；模型卡标题改为“文字处理模型 / Agent 执行模型”。
+  - 历史页新增“Agent 调用”筛选维度，卡片支持展示命令、结果与证据摘要。
+  - 新增轻量 `apple.music.control` 执行器：ASR 转写后直接走 Music 命令解析 -> 固定 AppleScript 执行 -> 播放状态与匹配验证 -> 证据回传（含 `fast_path` 标记）。
+  - 全局热键新增第二套独立长按状态机，支持“开始/结束说话”和“开启Agent”分别配置。
+- 为什么这样改：
+  - 目标是满足“独立一层、速度优先、只做音乐”的产品要求，避免把 Agent 能力和当前听写主链绑死在一起。
+  - 通过固定工具执行 + 结果校验，可以在不引入复杂框架的情况下保证可用性与可追踪性。
+- 影响了哪些模块：
+  - 热键触发层、会话状态机、交互协调器、历史存储与历史 UI、首页/设置页文案与配置入口、HUD 展示层、核心单测覆盖。
+
 ### 2026-05-17 22:28 - 历史卡片移除 “ASR 原文：” 前缀
 
 - 本次任务：按反馈去掉历史记录中原文行的标签字样。

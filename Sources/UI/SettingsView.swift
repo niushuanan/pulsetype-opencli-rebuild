@@ -80,7 +80,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 pageTitleText(
                     "首页",
-                    subtitle: "单键开口即写，ASR 转写与智能整理无缝衔接，语音内容可直接成为可用成稿。"
+                    subtitle: "单键开口即写，长按可触发 Agent 音乐执行，语音转写与动作结果都能快速回传。"
                 )
                 homeProductIntroCard
                 metricsGrid
@@ -98,11 +98,13 @@ struct SettingsView: View {
 
             Label("单键开始/结束说话：轻点触发，按住说话，松开后自动结束。", systemImage: "keyboard")
                 .font(PulseUI.Typography.body)
+            Label("长按 Agent 键：直接触发 Music 控制，支持播放、暂停、继续与切歌。", systemImage: "music.note")
+                .font(PulseUI.Typography.body)
             Label("ASR + 文本整理双模型：先转写，再把口述整理成可直接发送的成稿。", systemImage: "waveform.and.magnifyingglass")
                 .font(PulseUI.Typography.body)
             Label("可切换模型与接口：ASR 和文本处理都能单独配置 Base URL、模型名、密钥。", systemImage: "slider.horizontal.3")
                 .font(PulseUI.Typography.body)
-            Label("历史与统计可追踪：结果可复制、可删除，首页指标实时累计。", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
+            Label("历史与统计可追踪：听写和 Agent 调用结果都可复制、可删除。", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
                 .font(PulseUI.Typography.body)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -113,7 +115,7 @@ struct SettingsView: View {
     private var historyPage: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                pageTitleText("历史", subtitle: "这里只保存普通听写结果，旧的高级能力记录不会展示。")
+                pageTitleText("历史", subtitle: "这里会保存普通听写和 Agent 音乐调用结果。")
                 HStack(spacing: 10) {
                     Picker("", selection: $controlCenterState.historyFilter) {
                         ForEach(LocalHistoryFilter.allCases) { filter in
@@ -140,8 +142,11 @@ struct SettingsView: View {
                         ForEach(filteredHistoryEntries) { entry in
                             HistoryRowView(
                                 entry: entry,
-                                onCopyPrimary: { copyText(entry.outputText ?? entry.inputText, toast: "结果已复制。") },
-                                onCopyRaw: { copyText(entry.inputText, toast: "ASR 原文已复制。") },
+                                onCopyPrimary: { copyText(entry.outputText ?? entry.errorMessage ?? entry.inputText, toast: "结果已复制。") },
+                                onCopyRaw: {
+                                    let toast = entry.mode == .agent ? "Agent 指令已复制。" : "ASR 原文已复制。"
+                                    copyText(entry.inputText, toast: toast)
+                                },
                                 onDelete: {
                                     localHistoryStore.delete(entryID: entry.id)
                                     showToast("已删除一条历史。")
@@ -158,7 +163,7 @@ struct SettingsView: View {
             .padding(.vertical, PulseUI.Spacing.pageVertical)
         }
         .confirmationDialog(
-            "确认清空普通听写历史？",
+            "确认清空听写与 Agent 历史？",
             isPresented: $showClearHistoryConfirmation,
             titleVisibility: .visible
         ) {
@@ -239,6 +244,32 @@ struct SettingsView: View {
 
             Divider()
 
+            HStack(spacing: 10) {
+                Text("开启Agent")
+                    .font(PulseUI.Typography.body)
+                Spacer()
+                Picker("开启Agent", selection: agentModifierBinding) {
+                    ForEach(HotkeyModifier.allCases) { modifier in
+                        Text(modifier.displayName).tag(modifier)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 180, alignment: .trailing)
+                .pickerStyle(.menu)
+            }
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+
+            HStack {
+                Spacer()
+                Text("长按触发，松开后执行 Music 指令")
+                    .font(PulseUI.Typography.caption)
+                    .pulseSecondaryText()
+            }
+            .padding(.bottom, 8)
+
+            Divider()
+
             HStack {
                 Text("退出输入")
                     .font(PulseUI.Typography.body)
@@ -304,7 +335,7 @@ struct SettingsView: View {
                     testAction: testASRConnection
                 )
                 modelEditor(
-                    title: "文字处理模型",
+                    title: "文字处理模型 / Agent 执行模型",
                     baseURL: Binding(
                         get: { providerSettingsStore.textConfig.baseURLString },
                         set: { providerSettingsStore.updateTextBaseURL($0) }
@@ -486,9 +517,9 @@ struct SettingsView: View {
 
     private var emptyHistoryCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("当前还没有普通听写历史。", systemImage: "tray")
+            Label("当前还没有历史记录。", systemImage: "tray")
                 .font(PulseUI.Typography.bodyStrong)
-            Text("完成一次听写后，ASR 原文、整理后的成稿和写入目标会显示在这里。")
+            Text("完成一次听写或 Agent 调用后，原始指令、执行结果和状态会显示在这里。")
                 .font(PulseUI.Typography.caption)
                 .pulseSecondaryText()
         }
@@ -511,6 +542,13 @@ struct SettingsView: View {
         Binding(
             get: { hotkeyStateStore.wakeModifier },
             set: { _ = hotkeyStateStore.setModifier($0, for: .wakeSession) }
+        )
+    }
+
+    private var agentModifierBinding: Binding<HotkeyModifier> {
+        Binding(
+            get: { hotkeyStateStore.agentModifier },
+            set: { _ = hotkeyStateStore.setAgentModifier($0) }
         )
     }
 

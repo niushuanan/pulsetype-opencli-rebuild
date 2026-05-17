@@ -141,6 +141,7 @@ final class HotkeyStateStore: ObservableObject {
     @Published private(set) var cancelTriggerMode: HotkeyTriggerMode
     @Published private(set) var wakeModifier: HotkeyModifier
     @Published private(set) var cancelModifier: HotkeyModifier
+    @Published private(set) var agentModifier: HotkeyModifier
 
     private let notificationCenter: NotificationCenter
     private let defaults: UserDefaults
@@ -152,6 +153,7 @@ final class HotkeyStateStore: ObservableObject {
     private let cancelModeStorageKey = "hotkeys.cancel.mode.v1"
     private let wakeModifierStorageKey = "hotkeys.wake.modifier.v1"
     private let cancelModifierStorageKey = "hotkeys.cancel.modifier.v1"
+    private let agentModifierStorageKey = "hotkeys.agent.modifier.v1"
     private let fixedCancelShortcut = KeyboardShortcuts.Shortcut(.escape)
 
     init(
@@ -167,6 +169,7 @@ final class HotkeyStateStore: ObservableObject {
         self.cancelTriggerMode = .shortcut
         self.wakeModifier = Self.loadModifier(defaults: defaults, key: wakeModifierStorageKey, fallback: .rightShift)
         self.cancelModifier = Self.loadModifier(defaults: defaults, key: cancelModifierStorageKey, fallback: .leftOption)
+        self.agentModifier = Self.loadModifier(defaults: defaults, key: agentModifierStorageKey, fallback: .rightCommand)
         self.wakeShortcutText = "未设置"
         self.cancelShortcutText = "未设置"
         self.hasConflict = false
@@ -231,6 +234,14 @@ final class HotkeyStateStore: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func setAgentModifier(_ modifier: HotkeyModifier) -> Bool {
+        agentModifier = modifier
+        defaults.set(modifier.rawValue, forKey: agentModifierStorageKey)
+        refresh(changeMessage: "Agent 触发键已更新。")
+        return true
+    }
+
     func refresh(changeMessage: String? = nil) {
         wakeShortcutRegistered = KeyboardShortcuts.getShortcut(for: .wakeSession) != nil
         cancelShortcutRegistered = KeyboardShortcuts.getShortcut(for: .cancelSession) != nil
@@ -257,7 +268,10 @@ final class HotkeyStateStore: ObservableObject {
     }
 
     private func resolveConflict() {
-        if wakeTriggerMode == .modifierTap, cancelTriggerMode == .modifierTap, wakeModifier == cancelModifier {
+        if wakeTriggerMode == .modifierTap, wakeModifier == agentModifier {
+            hasConflict = true
+            conflictMessage = "开始/结束说话 与 开启Agent 不能使用同一个修饰键。"
+        } else if wakeTriggerMode == .modifierTap, cancelTriggerMode == .modifierTap, wakeModifier == cancelModifier {
             hasConflict = true
             conflictMessage = "开始键和取消键不能使用同一个修饰键。"
         } else {

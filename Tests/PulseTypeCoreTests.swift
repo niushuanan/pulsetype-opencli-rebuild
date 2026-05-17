@@ -35,7 +35,7 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(store.textConfig.modelName, "claude-3-5-sonnet-latest")
     }
 
-    func testHistoryStoreKeepsOnlyOrdinaryDictationRowsFromOldFiles() throws {
+    func testHistoryStoreKeepsSupportedModesFromOldFiles() throws {
         let directory = makeTemporaryDirectory()
         let file = directory.appendingPathComponent("session-history-v2.json")
         let payload = """
@@ -53,6 +53,17 @@ final class PulseTypeCoreTests: XCTestCase {
           },
           {
             "id": "22222222-2222-2222-2222-222222222222",
+            "timestamp": "2026-05-17T09:00:30Z",
+            "mode": "agent",
+            "appName": "Music",
+            "bundleID": "com.apple.Music",
+            "inputText": "播放稻香",
+            "outputText": "已开始播放：周杰伦 - 稻香。",
+            "status": "success",
+            "agentEvidenceSummary": "apple.music.control|fast_path=true|state=play"
+          },
+          {
+            "id": "33333333-3333-3333-3333-333333333333",
             "timestamp": "2026-05-17T09:01:00Z",
             "mode": "brainstorm",
             "appName": "Old",
@@ -67,9 +78,10 @@ final class PulseTypeCoreTests: XCTestCase {
 
         let store = LocalHistoryStore(historyDirectory: directory)
 
-        XCTAssertEqual(store.entries.count, 1)
-        XCTAssertEqual(store.entries.first?.inputText, "asr raw")
-        XCTAssertEqual(store.entries.first?.outputText, "final text")
+        XCTAssertEqual(store.entries.count, 2)
+        XCTAssertEqual(store.entries.map(\.mode), [.agent, .dictation])
+        XCTAssertEqual(store.entries.last?.inputText, "asr raw")
+        XCTAssertEqual(store.entries.last?.outputText, "final text")
         XCTAssertEqual(store.lifetimeSnapshot.totalInputCharacters, "final text".count)
     }
 
