@@ -224,7 +224,7 @@ struct SettingsView: View {
 
             HStack(spacing: 10) {
                 Text("开始/结束说话")
-                    .font(PulseUI.Typography.bodyStrong)
+                    .font(PulseUI.Typography.body)
                 Spacer()
                 Picker("开始/结束说话", selection: wakeModifierBinding) {
                     ForEach(HotkeyModifier.allCases) { modifier in
@@ -241,7 +241,7 @@ struct SettingsView: View {
 
             HStack {
                 Text("退出输入")
-                    .font(PulseUI.Typography.bodyStrong)
+                    .font(PulseUI.Typography.body)
                 Spacer()
                 fixedHotkeyValue("Esc")
             }
@@ -379,7 +379,7 @@ struct SettingsView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(PulseUI.Typography.bodyStrong)
+                .font(PulseUI.Typography.body)
                 .padding(.bottom, 10)
 
             TextField("接口地址（Base URL）", text: baseURL)
