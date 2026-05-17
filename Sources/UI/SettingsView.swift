@@ -282,10 +282,7 @@ struct SettingsView: View {
             Text("模型设置")
                 .font(PulseUI.Typography.sectionTitle)
 
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 360), spacing: 12, alignment: .top)],
-                spacing: 12
-            ) {
+            VStack(alignment: .leading, spacing: 12) {
                 modelEditor(
                     title: "语音识别 ASR",
                     baseURL: Binding(
