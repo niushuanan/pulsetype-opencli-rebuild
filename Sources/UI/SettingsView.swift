@@ -617,7 +617,7 @@ private struct SettingsSidebarSelectionButtonStyle: ButtonStyle {
             .font(PulseUI.Typography.bodyStrong)
             .foregroundStyle(textColor)
             .padding(.horizontal, 16)
-            .padding(.vertical, 6)
+            .padding(.vertical, 5)
             .background(
                 RoundedRectangle(cornerRadius: PulseUI.Radius.compactCard, style: .continuous)
                     .fill(fillColor)
