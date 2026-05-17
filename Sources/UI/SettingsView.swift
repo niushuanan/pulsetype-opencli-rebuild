@@ -169,28 +169,24 @@ struct SettingsView: View {
     private var metricsGrid: some View {
         LazyVGrid(columns: homeMetricColumns, spacing: 12) {
             HomeMetricCard(
-                title: "累计语音",
+                title: "历史对话时长",
                 value: HomeStatsFormatter.durationText(controlCenterState.homeStatsSnapshot.totalDialogueDurationSeconds),
-                subtitle: "已完成写入的录音时长",
-                symbolName: "waveform"
+                subtitle: "仅统计成功听写"
             )
             HomeMetricCard(
-                title: "成稿字数",
+                title: "历史输入字数",
                 value: HomeStatsFormatter.integerText(controlCenterState.homeStatsSnapshot.totalInputCharacters),
-                subtitle: "DeepSeek 处理后的最终文本",
-                symbolName: "text.alignleft"
+                subtitle: "累计写入字符"
             )
             HomeMetricCard(
-                title: "语音速度",
+                title: "平均速度",
                 value: HomeStatsFormatter.speedText(snapshot: controlCenterState.homeStatsSnapshot),
-                subtitle: "按带时长的成功记录计算",
-                symbolName: "speedometer"
+                subtitle: "字/分钟（真实时长）"
             )
             HomeMetricCard(
-                title: "少打键盘",
+                title: "总计节省时间",
                 value: HomeStatsFormatter.durationText(controlCenterState.homeStatsSnapshot.savedTypingSeconds),
-                subtitle: "按中文手打 \(Int(LocalHistoryStore.manualTypingCharactersPerMinute)) 字/分估算",
-                symbolName: "keyboard.chevron.compact.down"
+                subtitle: "相对打字效率估算"
             )
         }
     }
