@@ -584,7 +584,47 @@ private extension View {
     @ViewBuilder
     func settingsBlueActionButton() -> some View {
         self
-            .buttonStyle(.borderedProminent)
-            .tint(Color(nsColor: .systemBlue))
+            .buttonStyle(SettingsSidebarSelectionButtonStyle())
+    }
+}
+
+private struct SettingsSidebarSelectionButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let accent = Color(nsColor: .controlAccentColor)
+        let fill: LinearGradient = isEnabled
+            ? LinearGradient(
+                colors: [
+                    accent.opacity(0.98),
+                    accent.opacity(0.90)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            : LinearGradient(
+                colors: [
+                    Color.primary.opacity(0.08),
+                    Color.primary.opacity(0.08)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+        return configuration.label
+            .font(PulseUI.Typography.bodyStrong)
+            .foregroundStyle(isEnabled ? Color.white : Color.primary.opacity(0.45))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(fill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(isEnabled ? Color.white.opacity(0.18) : Color.primary.opacity(0.10), lineWidth: 1)
+            )
+            .opacity(configuration.isPressed && isEnabled ? 0.90 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
