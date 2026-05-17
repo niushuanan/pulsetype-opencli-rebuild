@@ -7,7 +7,6 @@ struct SettingsView: View {
 
     @ObservedObject private var controlCenterState: ControlCenterState
     @ObservedObject private var hotkeyStateStore: HotkeyStateStore
-    @ObservedObject private var permissionsCenter: PermissionsCenter
     @ObservedObject private var providerSettingsStore: ProviderSettingsStore
     @ObservedObject private var localHistoryStore: LocalHistoryStore
     @ObservedObject private var toastPresenter: ToastPresenter
@@ -22,7 +21,6 @@ struct SettingsView: View {
         self.model = model
         _controlCenterState = ObservedObject(wrappedValue: model.controlCenterState)
         _hotkeyStateStore = ObservedObject(wrappedValue: model.hotkeyStateStore)
-        _permissionsCenter = ObservedObject(wrappedValue: model.permissionsCenter)
         _providerSettingsStore = ObservedObject(wrappedValue: model.providerSettingsStore)
         _localHistoryStore = ObservedObject(wrappedValue: model.localHistoryStore)
         _toastPresenter = ObservedObject(wrappedValue: model.toastPresenter)
@@ -82,17 +80,15 @@ struct SettingsView: View {
     private var homePage: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                pageTitleText("普通语音输入", subtitle: "只保留一条主链：录音 -> ASR -> DeepSeek -> 写入。")
-                currentSessionCard
+                pageTitleText(
+                    "语音输入概览",
+                    subtitle: "按 \(hotkeyStateStore.wakeShortcutText) 开始或停止，ASR 识别后由 DeepSeek 整理并写入当前应用。"
+                )
                 metricsGrid
-                permissionSection
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, PulseUI.Spacing.pageHorizontal)
             .padding(.vertical, PulseUI.Spacing.pageVertical)
-        }
-        .onAppear {
-            permissionsCenter.refreshStatuses()
         }
     }
 
@@ -171,106 +167,38 @@ struct SettingsView: View {
             .padding(.vertical, PulseUI.Spacing.pageVertical)
         }
         .onAppear {
-            permissionsCenter.refreshStatuses()
             hotkeyStateStore.refresh()
             refreshAppPromptDraft()
         }
     }
 
-    private var currentSessionCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: model.sessionStore.phase.menuBarSymbol)
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(PulseUI.ColorTokens.glow)
-                    .frame(width: 46, height: 46)
-                    .background(Circle().fill(PulseUI.ColorTokens.glow.opacity(0.12)))
-
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(model.sessionStore.phase.title)
-                        .font(PulseUI.Typography.sectionTitle)
-                    Text(model.sessionStore.statusMessage)
-                        .font(PulseUI.Typography.body)
-                        .pulseSecondaryText()
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-            }
-
-            HStack(spacing: 10) {
-                Button(primaryToggleTitle) {
-                    model.interactionCoordinator.handleWakeInput()
-                }
-                .controlCenterPrimaryActionButton()
-                .disabled(!canToggleSession)
-
-                Button("取消") {
-                    model.interactionCoordinator.handleCancelInput()
-                }
-                .controlCenterSecondaryActionButton()
-                .disabled(model.sessionStore.phase == .idle)
-
-                Text("开始键：\(hotkeyStateStore.wakeShortcutText) · 取消键：Esc")
-                    .font(PulseUI.Typography.caption)
-                    .pulseSecondaryText()
-            }
-        }
-        .padding(16)
-        .controlCenterSectionGroup()
-    }
-
     private var metricsGrid: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
             HomeMetricCard(
-                title: "听写时长",
-                value: durationText(controlCenterState.homeStatsSnapshot.totalDialogueDurationSeconds),
-                subtitle: "成功写入的语音时长"
+                title: "累计语音",
+                value: HomeStatsFormatter.durationText(controlCenterState.homeStatsSnapshot.totalDialogueDurationSeconds),
+                subtitle: "已完成写入的录音时长",
+                symbolName: "waveform"
             )
             HomeMetricCard(
-                title: "写入字数",
-                value: "\(controlCenterState.homeStatsSnapshot.totalInputCharacters)",
-                subtitle: "DeepSeek 整理后的文本"
+                title: "成稿字数",
+                value: HomeStatsFormatter.integerText(controlCenterState.homeStatsSnapshot.totalInputCharacters),
+                subtitle: "DeepSeek 处理后的最终文本",
+                symbolName: "text.alignleft"
             )
             HomeMetricCard(
-                title: "平均速度",
+                title: "语音速度",
                 value: HomeStatsFormatter.speedText(snapshot: controlCenterState.homeStatsSnapshot),
-                subtitle: "字/分钟"
+                subtitle: "按带时长的成功记录计算",
+                symbolName: "speedometer"
             )
             HomeMetricCard(
-                title: "节省时间",
-                value: durationText(controlCenterState.homeStatsSnapshot.savedTypingSeconds),
-                subtitle: "相对打字估算"
+                title: "少打键盘",
+                value: HomeStatsFormatter.durationText(controlCenterState.homeStatsSnapshot.savedTypingSeconds),
+                subtitle: "按中文手打 \(Int(LocalHistoryStore.manualTypingCharactersPerMinute)) 字/分估算",
+                symbolName: "keyboard.chevron.compact.down"
             )
         }
-    }
-
-    private var permissionSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("权限", subtitle: "麦克风决定能不能录音，辅助功能决定能不能稳定写入其他应用。")
-            ForEach(permissionsCenter.presentationItems()) { item in
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: item.state == .granted ? "checkmark.circle.fill" : "exclamationmark.circle")
-                        .foregroundStyle(item.state == .granted ? PulseUI.ColorTokens.success : PulseUI.ColorTokens.warning)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(item.title)
-                            .font(PulseUI.Typography.bodyStrong)
-                        Text(item.detail)
-                            .font(PulseUI.Typography.caption)
-                            .pulseSecondaryText()
-                    }
-                    Spacer()
-                    Button("打开设置") {
-                        permissionsCenter.openSystemSettings(for: item.id)
-                    }
-                    .controlCenterSecondaryActionButton()
-                }
-                if item.id != permissionsCenter.presentationItems().last?.id {
-                    Divider()
-                }
-            }
-        }
-        .padding(16)
-        .controlCenterSectionGroup()
     }
 
     private var hotkeySection: some View {
@@ -595,19 +523,6 @@ struct SettingsView: View {
         localHistoryStore.entries(matching: controlCenterState.historyFilter)
     }
 
-    private var canToggleSession: Bool {
-        switch model.sessionStore.phase {
-        case .idle, .cancelled, .error, .listening:
-            return true
-        case .transcribing, .textProcessing, .inserting:
-            return false
-        }
-    }
-
-    private var primaryToggleTitle: String {
-        model.sessionStore.phase == .listening ? "停止并处理" : "开始听写"
-    }
-
     private var wakeTriggerModeBinding: Binding<HotkeyTriggerMode> {
         Binding(
             get: { hotkeyStateStore.wakeTriggerMode },
@@ -688,18 +603,6 @@ struct SettingsView: View {
 
     private func showToast(_ text: String) {
         toastPresenter.show(text)
-    }
-
-    private func durationText(_ seconds: Double) -> String {
-        guard seconds > 0 else {
-            return "0 秒"
-        }
-        if seconds < 60 {
-            return "\(Int(seconds.rounded())) 秒"
-        }
-        let minutes = Int(seconds / 60)
-        let remainder = Int(seconds) % 60
-        return remainder == 0 ? "\(minutes) 分钟" : "\(minutes) 分 \(remainder) 秒"
     }
 
     private func apiKeyPlaceholder(for state: ProviderSettingsStore.CredentialState) -> String {

@@ -58,6 +58,36 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(store.lifetimeSnapshot.totalInputCharacters, "final text".count)
     }
 
+    func testHistoryLifetimeStatsEstimateManualTypingTimeFromTimedEntriesOnly() {
+        let directory = makeTemporaryDirectory()
+        let store = LocalHistoryStore(historyDirectory: directory)
+
+        store.append(
+            SessionHistoryEntry(
+                appName: "Notes",
+                bundleID: "com.apple.Notes",
+                inputText: "",
+                outputText: String(repeating: "字", count: 120),
+                status: .success,
+                audioDurationSeconds: 60
+            )
+        )
+        store.append(
+            SessionHistoryEntry(
+                appName: "Legacy",
+                bundleID: "legacy.bundle",
+                inputText: "",
+                outputText: String(repeating: "旧", count: 80),
+                status: .success,
+                audioDurationSeconds: nil
+            )
+        )
+
+        XCTAssertEqual(store.lifetimeSnapshot.totalInputCharacters, 200)
+        XCTAssertEqual(store.lifetimeSnapshot.averageCharactersPerMinute, 120, accuracy: 0.01)
+        XCTAssertEqual(store.lifetimeSnapshot.savedTypingSeconds, 30, accuracy: 0.01)
+    }
+
     func testSessionStoreRunsOrdinaryDictationPhasesOnly() {
         let store = SessionStore()
         let transcription = SpeechTranscriptionResult(

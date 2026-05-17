@@ -5,12 +5,28 @@ struct HomeMetricCard: View {
     let title: String
     let value: String
     let subtitle: String
+    let symbolName: String
+    var tintColor: Color = PulseUI.ColorTokens.glow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(PulseUI.Typography.captionStrong)
-                .pulseSecondaryText()
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Text(title)
+                    .font(PulseUI.Typography.captionStrong)
+                    .pulseSecondaryText()
+
+                Spacer(minLength: 8)
+
+                Image(systemName: symbolName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(tintColor)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        Circle()
+                            .fill(tintColor.opacity(0.12))
+                    )
+            }
+
             Text(value)
                 .font(PulseUI.Typography.value)
                 .pulsePrimaryText()

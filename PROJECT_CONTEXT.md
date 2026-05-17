@@ -31,6 +31,14 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/SettingsView.swift`：控制中心页面入口。
 
 ## 最近改了什么
+### 2026-05-17 17:52 - 首页信息架构调整
+
+- 本次任务：按反馈简化首页，只展示语音输入成果数据，不再放操作按钮和权限说明。
+- 改了哪些文件：`Sources/UI/SettingsView.swift`，`Sources/UI/SettingsViewComponents.swift`，`Sources/UI/HomeStatsFormatter.swift`，`Sources/Core/History/LocalHistoryStore.swift`，`Tests/PulseTypeCoreTests.swift`
+- 改了什么：首页删除主操作卡片和权限区；四张数据卡改为累计语音、成稿字数、语音速度、少打键盘；统计公式改为按中文手打 80 字/分钟估算少打键盘时间；平均速度和少打键盘时间只使用带录音时长的成功记录。
+- 为什么这样改：首页只需要回答“这个输入法帮我产出了什么”，启动和取消交给快捷键，权限问题不再占用首页空间；统计口径用更贴近中文输入的手打基准，避免数字长期显示 0。
+- 影响了哪些模块：首页 UI、历史统计、首页数字格式化、普通听写核心测试。
+
 - 本次任务：把项目重构成只保留普通语音输入的版本。
 - 改了哪些文件：
   - `Sources/App/AppModel.swift`

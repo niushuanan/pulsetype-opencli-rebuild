@@ -105,6 +105,8 @@ struct HistoryLifetimeSnapshot: Codable, Equatable {
 
 @MainActor
 final class LocalHistoryStore: ObservableObject {
+    static let manualTypingCharactersPerMinute: Double = 80
+
     @Published private(set) var entries: [SessionHistoryEntry] = []
     @Published private(set) var lifetimeSnapshot: HistoryLifetimeSnapshot = .zero
 
@@ -219,6 +221,7 @@ final class LocalHistoryStore: ObservableObject {
     private func recalculateAndPersistLifetime() {
         var totalDuration: Double = 0
         var totalCharacters = 0
+        var timedCharacters = 0
         var speedSamples = 0
 
         for entry in entries where entry.status == .success {
@@ -226,12 +229,14 @@ final class LocalHistoryStore: ObservableObject {
             totalCharacters += text.count
             if let duration = entry.audioDurationSeconds, duration > 0 {
                 totalDuration += duration
+                timedCharacters += text.count
                 speedSamples += 1
             }
         }
 
-        let averageCharactersPerMinute = totalDuration > 0 ? Double(totalCharacters) / (totalDuration / 60.0) : 0
-        let savedTypingSeconds = max(0, Double(totalCharacters) / 3.5 - totalDuration)
+        let averageCharactersPerMinute = totalDuration > 0 ? Double(timedCharacters) / (totalDuration / 60.0) : 0
+        let manualTypingSeconds = Double(timedCharacters) / Self.manualTypingCharactersPerMinute * 60.0
+        let savedTypingSeconds = max(0, manualTypingSeconds - totalDuration)
         lifetimeSnapshot = HistoryLifetimeSnapshot(
             totalDialogueDurationSeconds: totalDuration,
             totalInputCharacters: totalCharacters,
