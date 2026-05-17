@@ -584,38 +584,7 @@ private extension View {
     @ViewBuilder
     func settingsBlueActionButton() -> some View {
         self
-            .buttonStyle(SettingsPrimaryButtonStyle())
-    }
-}
-
-private struct SettingsPrimaryButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.controlActiveState) private var controlActiveState
-
-    func makeBody(configuration: Configuration) -> some View {
-        let isWindowActive = controlActiveState == .key || controlActiveState == .active
-        let backgroundColor: Color = {
-            if isEnabled {
-                return Color(nsColor: .systemBlue).opacity(isWindowActive ? 1.0 : 0.84)
-            }
-            return Color(nsColor: .quaternaryLabelColor).opacity(isWindowActive ? 1.0 : 0.9)
-        }()
-
-        let textColor: Color = isEnabled ? .white : Color(nsColor: .secondaryLabelColor)
-
-        configuration.label
-            .font(PulseUI.Typography.bodyStrong)
-            .foregroundStyle(textColor)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: PulseUI.Radius.compactCard, style: .continuous)
-                    .fill(backgroundColor)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: PulseUI.Radius.compactCard, style: .continuous)
-                    .stroke(Color.primary.opacity(isEnabled ? 0.04 : 0.08), lineWidth: 1)
-            )
-            .opacity(configuration.isPressed && isEnabled ? 0.88 : 1.0)
+            .buttonStyle(.borderedProminent)
+            .tint(Color(nsColor: .systemBlue))
     }
 }
