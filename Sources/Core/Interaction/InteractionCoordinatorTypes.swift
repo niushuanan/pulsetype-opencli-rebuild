@@ -382,11 +382,18 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
         )
 
         guard scriptResult.exitCode == 0 else {
+            let stderr = scriptResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let stderrField: String
+            if stderr.isEmpty {
+                stderrField = ""
+            } else {
+                stderrField = "|osascript_stderr=\(sanitizeEvidenceValue(stderr))"
+            }
             return AgentMusicExecutionOutcome(
                 status: .failed,
                 message: "Music 执行失败，请确认应用可用后重试。",
                 outputText: nil,
-                evidenceSummary: baseEvidence + "|error=osascript_failed"
+                evidenceSummary: baseEvidence + "|error=osascript_failed" + stderrField
             )
         }
 
@@ -577,7 +584,6 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
                     "exit repeat",
                     "end if",
                     "on error",
-                    "next repeat",
                     "end try",
                     "end repeat",
                     "if targetTrack is missing value then",

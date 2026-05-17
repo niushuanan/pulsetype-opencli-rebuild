@@ -33,6 +33,21 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 01:41 - Agent 音乐执行失败修复（AppleScript 语法纠正 + 错误证据补齐）
+
+- 本次任务：修复“执行失败”且历史只显示 `osascript_failed`、看不到真实错误的问题。
+- 改了哪些文件：
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 删除 `runPlay(query:)` AppleScript 里的非法语句 `next repeat`（位于 `on error` 分支），避免脚本编译阶段直接失败。
+  - `osascript` 失败时把 stderr 回传到证据字段 `osascript_stderr=...`，后续可直接在历史里看具体错误，不再是黑盒失败。
+- 为什么这样改：
+  - 这次失败的直接根因是脚本语法错误，导致命令未真正执行。
+  - 没有 stderr 会让排障只能猜，补齐后能快速定位具体报错行。
+- 影响了哪些模块：
+  - Agent 音乐执行器 `play` 路径稳定性、失败证据可观测性、历史诊断效率。
+
 ### 2026-05-18 01:37 - Agent 音乐下一首乱跳修复（队列旋转锁定 + 匹配校验纠偏）
 
 - 本次任务：修复“播放指定歌曲后，下一首会跳到陌生歌曲”的问题，并定位证据校验误判。
