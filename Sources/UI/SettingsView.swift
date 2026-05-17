@@ -351,15 +351,15 @@ struct SettingsView: View {
 
                 HStack {
                     Spacer()
-                    Button("恢复默认提示词") {
-                        providerSettingsStore.textProcessingPrompt = ProviderSettingsStore.defaultTextProcessingPrompt
-                        showToast("默认提示词已恢复。")
-                    }
-                    .controlCenterSecondaryActionButton()
+                Button("恢复默认提示词") {
+                    providerSettingsStore.textProcessingPrompt = ProviderSettingsStore.defaultTextProcessingPrompt
+                    showToast("默认提示词已恢复。")
                 }
+                .settingsBlueActionButton()
             }
-            .padding(16)
-            .controlCenterSectionGroup()
+        }
+        .padding(16)
+        .controlCenterSectionGroup()
         }
     }
 
@@ -396,15 +396,15 @@ struct SettingsView: View {
                 Button("保存密钥") {
                     saveAction()
                 }
-                .controlCenterSecondaryActionButton()
-                Button("删除密钥", role: .destructive) {
+                .settingsBlueActionButton()
+                Button("删除密钥") {
                     clearAction()
                 }
-                .controlCenterSecondaryActionButton()
+                .settingsBlueActionButton()
                 Button(isTesting ? "测试中" : "测试连接") {
                     testAction()
                 }
-                .controlCenterSecondaryActionButton()
+                .settingsBlueActionButton()
                 .disabled(isTesting || validationMessage != nil)
             }
             .padding(.bottom, 10)
@@ -577,5 +577,15 @@ struct SettingsView: View {
         default:
             return "API Key"
         }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func settingsBlueActionButton() -> some View {
+        self
+            .buttonStyle(.borderedProminent)
+            .tint(Color(nsColor: .systemBlue))
+            .foregroundStyle(.white)
     }
 }
