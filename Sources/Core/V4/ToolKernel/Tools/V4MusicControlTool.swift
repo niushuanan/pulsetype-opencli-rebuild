@@ -1,0 +1,2844 @@
+import Foundation
+
+struct V4MusicControlTool: V4Tool {
+    struct LibraryTrackRecord: Codable, Equatable, Sendable {
+        let persistentID: String
+        let name: String
+        let artist: String
+        let album: String
+    }
+    private struct LibraryCatalogSnapshot: Codable, Equatable, Sendable {
+        let generatedAt: Date
+        let revision: String
+        let tracks: [LibraryTrackRecord]
+    }
+    struct SemanticPlayDecision: Equatable, Sendable {
+        let query: String
+        let intent: PlayIntent
+        let confidence: Double
+        let reason: String?
+    }
+
+    private struct SemanticPlayPayload: Decodable {
+        let intent: String?
+        let query: String?
+        let confidence: Double?
+        let reason: String?
+    }
+
+    private struct LibraryTrackCandidate: Equatable, Sendable {
+        let track: LibraryTrackRecord
+        let score: Int
+    }
+
+    private struct LibraryAlbumCandidate: Equatable, Sendable {
+        let key: String
+        let album: String
+        let artist: String
+        let trackIDs: [String]
+        let score: Int
+    }
+
+    private struct RagTrackPickPayload: Decodable {
+        let persistentID: String?
+        let confidence: Double?
+        let reason: String?
+    }
+
+    private struct RagAlbumPickPayload: Decodable {
+        let albumKey: String?
+        let confidence: Double?
+        let reason: String?
+    }
+
+    private struct LibraryTrackIDPickPayload: Decodable {
+        let persistentID: String?
+        let confidence: Double?
+        let reason: String?
+    }
+
+    private struct LibraryTrackSelectionDecision: Equatable, Sendable {
+        let track: LibraryTrackRecord
+        let strategy: String
+        let confidence: Double?
+        let reason: String?
+
+        var source: String {
+            switch strategy {
+            case "library_local_exact", "library_local_index_fallback":
+                return "local"
+            case "library_llm_index_only":
+                return "llm"
+            default:
+                return "unknown"
+            }
+        }
+    }
+
+    private actor LibraryCatalogCache {
+        private var tracks: [LibraryTrackRecord] = []
+        private var updatedAt: Date?
+        private var revision: String?
+
+        func load(maxAge: TimeInterval, revision expectedRevision: String?) -> [LibraryTrackRecord]? {
+            guard
+                let updatedAt,
+                Date().timeIntervalSince(updatedAt) <= maxAge,
+                !tracks.isEmpty
+            else {
+                return nil
+            }
+            if let expectedRevision, let revision, expectedRevision != revision {
+                return nil
+            }
+            return tracks
+        }
+
+        func save(_ tracks: [LibraryTrackRecord], revision: String?) {
+            self.tracks = tracks
+            updatedAt = Date()
+            self.revision = revision
+        }
+
+        func clear() {
+            tracks = []
+            updatedAt = nil
+            revision = nil
+        }
+    }
+
+    enum PlayIntent: String, Equatable, Sendable {
+        case auto
+        case song
+        case album
+        case mood
+    }
+
+    enum Action: String, Equatable, Sendable {
+        case open
+        case play
+        case pause
+        case resume
+        case next
+        case previous
+    }
+
+    struct Command: Equatable, Sendable {
+        let action: Action
+        let query: String?
+        let playIntent: PlayIntent
+        let rawCommand: String
+    }
+
+    struct ResultPayload: Equatable, Sendable {
+        let action: Action
+        let state: String
+        let track: String?
+        let artist: String?
+        let evidence: String
+    }
+
+    struct LibraryPlaybackVerification: Equatable, Sendable {
+        let playbackActive: Bool
+        let queryMatches: Bool
+        let targetIDMatches: Bool
+        let metadataMatches: Bool
+
+        var isAccepted: Bool {
+            playbackActive && (targetIDMatches || metadataMatches || queryMatches)
+        }
+    }
+
+    private struct PlaybackSnapshot: Equatable, Sendable {
+        let persistentID: String
+        let track: String
+        let artist: String
+        let state: String
+        let position: Double
+        let duration: Double
+    }
+
+    private actor LibraryOrderSessionCoordinator {
+        private var task: Task<Void, Never>?
+        private var orderedTrackIDs: [String] = []
+        private var revision: String?
+
+        func replaceSession(orderedTrackIDs: [String], revision: String?) {
+            task?.cancel()
+            self.orderedTrackIDs = orderedTrackIDs
+            self.revision = revision
+            guard !orderedTrackIDs.isEmpty else {
+                task = nil
+                return
+            }
+            task = Task.detached(priority: .background) {
+                await V4MusicControlTool.runLockedLibraryOrderLoop(orderedTrackIDs: orderedTrackIDs)
+            }
+        }
+
+        func cancel() {
+            task?.cancel()
+            task = nil
+            orderedTrackIDs = []
+            revision = nil
+        }
+
+        func canReuseQueue(for targetID: String, revision expectedRevision: String?) -> Bool {
+            guard !orderedTrackIDs.isEmpty else {
+                return false
+            }
+            if let expectedRevision, revision != expectedRevision {
+                return false
+            }
+            return orderedTrackIDs.contains {
+                $0.caseInsensitiveCompare(targetID) == .orderedSame
+            }
+        }
+    }
+
+    typealias ExecuteHandler = @Sendable (Command) async throws -> ResultPayload
+    typealias SemanticResolver = @Sendable (String, V4ToolExecutionContext) async -> SemanticPlayDecision?
+
+    let spec = V4ToolSpec(
+        toolName: "apple.music.control",
+        displayName: "控制音乐",
+        summary: "控制本机 Music 播放、暂停、继续与切歌，并返回播放证据。",
+        supportedLanes: V4Lane.allCases,
+        inputSchemaVersion: "v1",
+        inputSchema: V4ToolInputSchema(
+            fields: [
+                V4ToolInputField(name: "command", kind: .string, summary: "原始命令"),
+                V4ToolInputField(name: "query", kind: .string, isRequired: false, summary: "播放目标")
+            ]
+        ),
+        requiresPermission: true,
+        requiredFeature: .music,
+        isConcurrencySafe: false,
+        mutatesUserData: true,
+        supportsStreamingResults: false
+    )
+
+    private let executeHandler: ExecuteHandler
+    private let modelSlotManager: V4ModelSlotManager?
+    private let generationProvider: any TextGenerationProvider
+    private let semanticResolver: SemanticResolver
+    private let errorCatalog = V4ToolErrorCatalog()
+    private static let libraryCatalogCache = LibraryCatalogCache()
+    private static let libraryIndexFileName = "music-library-index-v1.json"
+    private static let lockedQueuePlaylistName = "PulseType Library Order Queue"
+    private static let libraryOrderSessionCoordinator = LibraryOrderSessionCoordinator()
+
+    init(
+        modelSlotManager: V4ModelSlotManager? = nil,
+        generationProvider: (any TextGenerationProvider)? = nil,
+        executeHandler: ExecuteHandler? = nil,
+        semanticResolver: SemanticResolver? = nil
+    ) {
+        let resolvedGenerationProvider = generationProvider ?? OpenAITextGenerationProvider()
+        self.modelSlotManager = modelSlotManager
+        self.generationProvider = resolvedGenerationProvider
+        self.executeHandler = executeHandler ?? Self.liveExecuteHandler(
+            modelSlotManager: modelSlotManager,
+            generationProvider: resolvedGenerationProvider
+        )
+        if let semanticResolver {
+            self.semanticResolver = semanticResolver
+        } else {
+            self.semanticResolver = { [modelSlotManager, generationProvider = resolvedGenerationProvider] command, context in
+                await Self.liveSemanticPlayDecision(
+                    command: command,
+                    context: context,
+                    modelSlotManager: modelSlotManager,
+                    generationProvider: generationProvider
+                )
+            }
+        }
+    }
+
+    init(executeHandler: @escaping ExecuteHandler) {
+        self.init(
+            modelSlotManager: nil,
+            generationProvider: nil,
+            executeHandler: executeHandler,
+            semanticResolver: nil
+        )
+    }
+
+    func validateSemanticInput(
+        arguments: V4ToolArguments,
+        context _: V4ToolExecutionContext
+    ) async -> V4ToolSemanticValidationFailure? {
+        let command = arguments.string(for: "command")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !command.isEmpty else {
+            return V4ToolSemanticValidationFailure(
+                messageForUser: "`command` 不能为空。",
+                messageForDebug: "music command empty"
+            )
+        }
+        return nil
+    }
+
+    func execute(
+        arguments: V4ToolArguments,
+        context: V4ToolExecutionContext
+    ) async throws -> V4ToolExecutionOutput {
+        let resolved = await resolveCommand(arguments: arguments, context: context)
+        let commandText = arguments.string(for: "command") ?? ""
+        if magicianIsDryRunCommand(commandText) {
+            return V4ToolExecutionOutput(
+                outputText: "演练完成：将执行音乐控制（\(resolved.action.rawValue)）。",
+                evidenceSummary: "apple.music.control dry_run=true",
+                rawPayload: .object(
+                    [
+                        "action": .string(resolved.action.rawValue),
+                        "playIntent": .string(resolved.playIntent.rawValue),
+                        "query": resolved.query.map(V4ToolValue.string) ?? .null,
+                        "dryRun": .boolean(true),
+                        "summary": .string("演练完成：将执行音乐控制（\(resolved.action.rawValue)）。")
+                    ]
+                )
+            )
+        }
+        let result = try await executeHandler(resolved)
+        let resolvedState = normalizedMusicState(result.state, action: result.action)
+        let outputText: String
+        if result.action == .open, resolvedState == "open_search" {
+            outputText = "已打开 Music 搜索结果，请确认播放对象。"
+        } else if result.action == .open {
+            outputText = "已打开 Music，尚未执行播放。"
+        } else if let track = result.track {
+            if let artist = result.artist, !artist.isEmpty {
+                outputText = "已开始播放：\(artist) - \(track)"
+            } else {
+                outputText = "已开始播放：\(track)"
+            }
+        } else {
+            switch result.action {
+            case .open:
+                outputText = "已打开 Music，尚未执行播放。"
+            case .pause:
+                outputText = "已暂停播放"
+            case .resume:
+                outputText = "已继续播放"
+            case .next:
+                outputText = "已切到下一首"
+            case .previous:
+                outputText = "已切到上一首"
+            case .play:
+                outputText = "已开始播放"
+            }
+        }
+
+        let requestedTrack = resolved.query?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTrack = result.track?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matchedRequestedTrack = matchesRequestedTrack(
+            requestedTrack: requestedTrack,
+            result: result
+        )
+        let evidenceConfidence: String = {
+            if result.action == .play, let requestedTrack, !requestedTrack.isEmpty {
+                return matchedRequestedTrack ? "high" : "low"
+            }
+            return "medium"
+        }()
+        let enrichedEvidence = enrichedEvidenceSummary(
+            baseEvidence: composedEvidenceSummary(
+                action: result.action,
+                state: resolvedState,
+                track: result.track,
+                artist: result.artist,
+                rawEvidence: result.evidence
+            ),
+            requestedTrack: requestedTrack,
+            resolvedTrack: resolvedTrack,
+            exactMatch: matchedRequestedTrack,
+            playbackState: resolvedState,
+            evidenceConfidence: evidenceConfidence
+        )
+
+        return V4ToolExecutionOutput(
+            outputText: outputText,
+            evidenceSummary: enrichedEvidence,
+            rawPayload: .object(
+                [
+                    "action": .string(result.action.rawValue),
+                    "state": .string(resolvedState),
+                    "playIntent": .string(resolved.playIntent.rawValue),
+                    "requestedTrack": requestedTrack.map(V4ToolValue.string) ?? .null,
+                    "track": result.track.map(V4ToolValue.string) ?? .null,
+                    "resolvedTrack": resolvedTrack.map(V4ToolValue.string) ?? .null,
+                    "exactMatch": .boolean(matchedRequestedTrack),
+                    "playbackState": .string(resolvedState),
+                    "evidenceConfidence": .string(evidenceConfidence),
+                    "artist": result.artist.map(V4ToolValue.string) ?? .null,
+                    "evidence": .string(result.evidence),
+                    "summary": .string(outputText)
+                ]
+            )
+        )
+    }
+
+    private func composedEvidenceSummary(
+        action: Action,
+        state: String,
+        track: String?,
+        artist: String?,
+        rawEvidence: String
+    ) -> String {
+        let trimmedRawEvidence = rawEvidence.trimmingCharacters(in: .whitespacesAndNewlines)
+        var fields: [String] = ["apple.music.control"]
+        if !magicianEvidenceHasField("action", in: trimmedRawEvidence) {
+            fields.append("action=\(action.rawValue)")
+        }
+        if !magicianEvidenceHasField("state", in: trimmedRawEvidence) {
+            fields.append("state=\(state)")
+        }
+        if
+            let track = track?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !track.isEmpty,
+            !magicianEvidenceHasField("track", in: trimmedRawEvidence)
+        {
+            fields.append("track=\(track)")
+        }
+        if
+            let artist = artist?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !artist.isEmpty,
+            !magicianEvidenceHasField("artist", in: trimmedRawEvidence)
+        {
+            fields.append("artist=\(artist)")
+        }
+        if !trimmedRawEvidence.isEmpty {
+            fields.append(trimmedRawEvidence)
+        }
+        return fields.joined(separator: " ")
+    }
+
+    private func enrichedEvidenceSummary(
+        baseEvidence: String,
+        requestedTrack: String?,
+        resolvedTrack: String?,
+        exactMatch: Bool,
+        playbackState: String,
+        evidenceConfidence: String
+    ) -> String {
+        var output = baseEvidence.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        func appendField(_ key: String, _ value: String?) {
+            guard let value else {
+                return
+            }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !magicianEvidenceHasField(key, in: output) else {
+                return
+            }
+            if output.isEmpty {
+                output = "\(key)=\(trimmed)"
+            } else {
+                output += "|\(key)=\(trimmed)"
+            }
+        }
+
+        appendField("requested_track", requestedTrack)
+        appendField("resolved_track", resolvedTrack)
+        appendField("exact_match", exactMatch ? "true" : "false")
+        appendField("playback_state", playbackState)
+        appendField("evidence_confidence", evidenceConfidence)
+        return output
+    }
+
+    private func matchesRequestedTrack(
+        requestedTrack: String?,
+        result: ResultPayload
+    ) -> Bool {
+        guard result.action == .play else {
+            return true
+        }
+        guard let requestedTrack, !requestedTrack.isEmpty else {
+            return requestedTrack?.isEmpty ?? true
+        }
+        if magicianMusicEvidenceMatchesQuery(output: result.evidence, query: requestedTrack) {
+            return true
+        }
+        var fallbackEvidence = [String]()
+        if let track = result.track?.trimmingCharacters(in: .whitespacesAndNewlines), !track.isEmpty {
+            fallbackEvidence.append("track=\(track)")
+        }
+        if let artist = result.artist?.trimmingCharacters(in: .whitespacesAndNewlines), !artist.isEmpty {
+            fallbackEvidence.append("artist=\(artist)")
+        }
+        guard !fallbackEvidence.isEmpty else {
+            return false
+        }
+        return magicianMusicEvidenceMatchesQuery(
+            output: fallbackEvidence.joined(separator: "|"),
+            query: requestedTrack
+        )
+    }
+
+    private func normalizedMusicState(_ raw: String, action: Action) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        switch action {
+        case .open:
+            return "open"
+        case .play:
+            return "play"
+        case .pause:
+            return "pause"
+        case .resume:
+            return "resume"
+        case .next:
+            return "next"
+        case .previous:
+            return "previous"
+        }
+    }
+
+    private func resolveCommand(
+        arguments: V4ToolArguments,
+        context: V4ToolExecutionContext
+    ) async -> Command {
+        let explicitQuery = arguments.string(for: "query")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let command = arguments.string(for: "command") ?? ""
+        let lowered = command.lowercased()
+
+        if containsAny(lowered, keywords: ["暂停", "pause", "停止播放", "停一下"]) {
+            return Command(action: .pause, query: nil, playIntent: .auto, rawCommand: command)
+        }
+        if containsAny(lowered, keywords: ["继续", "恢复", "resume", "继续播放"]) {
+            return Command(action: .resume, query: nil, playIntent: .auto, rawCommand: command)
+        }
+        if containsAny(lowered, keywords: ["下一首", "下一曲", "next", "切歌"]) {
+            return Command(action: .next, query: nil, playIntent: .auto, rawCommand: command)
+        }
+        if containsAny(lowered, keywords: ["上一首", "上一曲", "previous", "prev"]) {
+            return Command(action: .previous, query: nil, playIntent: .auto, rawCommand: command)
+        }
+        if containsAny(lowered, keywords: ["打开音乐", "打开 music", "启动音乐", "启动 music", "播放音乐", "打开播放器", "启动播放器"]) {
+            return Command(action: .open, query: nil, playIntent: .auto, rawCommand: command)
+        }
+        if let moodQuery = inferredMoodQuery(from: lowered) {
+            return Command(action: .play, query: moodQuery, playIntent: .mood, rawCommand: command)
+        }
+        let playIntent = inferredPlayIntent(from: lowered)
+        if let explicitQuery, !explicitQuery.isEmpty {
+            return Command(action: .play, query: explicitQuery, playIntent: playIntent, rawCommand: command)
+        }
+
+        let inferredQuery = magicianMusicSearchQueries(from: command).first
+        if shouldUseSemanticIntentResolver(loweredCommand: lowered, inferredQuery: inferredQuery) {
+            if let semanticDecision = await semanticResolver(command, context) {
+                return Command(
+                    action: .play,
+                    query: semanticDecision.query,
+                    playIntent: semanticDecision.intent,
+                    rawCommand: command
+                )
+            }
+        }
+
+        if let inferredQuery, isGenericPlaybackQuery(inferredQuery) {
+            return Command(action: .play, query: nil, playIntent: .auto, rawCommand: command)
+        }
+        return Command(action: .play, query: inferredQuery, playIntent: playIntent, rawCommand: command)
+    }
+
+    private func containsAny(_ value: String, keywords: [String]) -> Bool {
+        keywords.contains { value.contains($0) }
+    }
+
+    private func isGenericPlaybackQuery(_ value: String) -> Bool {
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return [
+            "音乐", "music", "歌曲", "歌", "打开音乐", "播放音乐", "打开播放器", "启动音乐", "启动播放器"
+        ].contains(normalized)
+    }
+
+    private func shouldUseSemanticIntentResolver(loweredCommand: String, inferredQuery: String?) -> Bool {
+        if containsAny(loweredCommand, keywords: ["《", "》", "“", "”", "\"", "专辑", "album"]) {
+            return false
+        }
+        if containsAny(
+            loweredCommand,
+            keywords: [
+                "我很", "我现在", "心情", "悲伤", "难过", "失恋", "压力", "焦虑", "孤独", "低落",
+                "开心", "快乐", "放松", "治愈", "燃", "热血",
+                "来首歌", "放首歌", "来点歌", "放点歌", "推荐", "随便", "随机",
+                "适合", "场景", "通勤", "学习", "工作", "夜晚", "睡前", "开车", "跑步",
+                "sad", "happy", "mood", "vibe", "focus", "study", "chill"
+            ]
+        ) {
+            return true
+        }
+
+        guard let inferredQuery else {
+            return true
+        }
+        let normalized = inferredQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.isEmpty || isGenericPlaybackQuery(normalized) {
+            return true
+        }
+        let termCount = normalized.split(whereSeparator: \.isWhitespace).count
+        let looksLikeDirectTitle = normalized.count <= 10 && termCount <= 2
+        return !looksLikeDirectTitle
+    }
+
+    private func inferredPlayIntent(from loweredCommand: String) -> PlayIntent {
+        if containsAny(loweredCommand, keywords: ["专辑", "整张", "整专", "album"]) {
+            return .album
+        }
+        if containsAny(loweredCommand, keywords: ["一首", "这首", "歌曲", "song"]) {
+            return .song
+        }
+        return .auto
+    }
+
+    private func inferredMoodQuery(from loweredCommand: String) -> String? {
+        guard containsAny(loweredCommand, keywords: ["的歌", "歌曲", "music", "song"]) else {
+            return nil
+        }
+        let tokens = [
+            "开心", "快乐", "治愈", "放松", "轻松", "安静", "燃", "热血", "伤感",
+            "sad", "happy", "calm", "relax"
+        ]
+        return tokens.first(where: { loweredCommand.contains($0) })
+    }
+
+    private static func isMoodDiscoveryQuery(_ query: String) -> Bool {
+        let normalized = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return [
+            "开心", "快乐", "治愈", "放松", "轻松", "安静", "燃", "热血", "伤感",
+            "sad", "happy", "calm", "relax"
+        ].contains(normalized)
+    }
+
+    private static func moodExpansionQueries(for query: String) -> [String] {
+        let normalized = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        switch normalized {
+        case "开心", "快乐", "happy":
+            return [query, "快乐", "开心", "欢快", "upbeat"]
+        case "治愈":
+            return [query, "治愈", "温柔", "舒缓", "calm"]
+        case "放松", "轻松", "calm", "relax":
+            return [query, "放松", "轻松", "舒缓", "calm"]
+        case "燃", "热血":
+            return [query, "热血", "燃", "激情", "rock"]
+        case "伤感", "sad":
+            return [query, "伤感", "sad", "抒情", "慢歌"]
+        default:
+            let separators = CharacterSet(charactersIn: ",，、/| ")
+            let terms = query
+                .components(separatedBy: separators)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return Array(Set([query] + terms))
+        }
+    }
+
+    private static func liveSemanticPlayDecision(
+        command: String,
+        context: V4ToolExecutionContext,
+        modelSlotManager: V4ModelSlotManager?,
+        generationProvider: any TextGenerationProvider
+    ) async -> SemanticPlayDecision? {
+        guard let configuration = await semanticModelConfiguration(
+            context: context,
+            modelSlotManager: modelSlotManager
+        ) else {
+            return nil
+        }
+        let apiKey = await semanticModelAPIKey(context: context, modelSlotManager: modelSlotManager) ?? ""
+        guard !configuration.providerType.requiresAPIKey || !apiKey.isEmpty else {
+            return nil
+        }
+
+        let systemPrompt = """
+        你是 PulseType 的音乐语义解析器。请把自然语言音乐请求解析成 JSON。
+        只输出 JSON，不要解释。JSON 字段：
+        intent: song | album | mood | scene | vibe | artist | none
+        query: 可用于 Music 资料库搜索的短查询词
+        confidence: 0~1
+        reason: 简短原因
+        规则：
+        1) 明确歌名用 song；明确专辑名用 album。
+        2) 情绪/场景/模糊意图请求（如“我很悲伤，放首歌”“通勤路上来点歌”）用 mood/scene/vibe/artist，query 输出 1~3 个可检索短词。
+        3) 无法判断时 intent=none，query 为空字符串。
+        """
+        let userPrompt = "用户请求：\(command)"
+
+        do {
+            let generation = try await generationProvider.generateText(
+                request: TextGenerationRequest(
+                    systemPrompt: systemPrompt,
+                    userPrompt: userPrompt,
+                    temperature: 0.1,
+                    maxOutputTokens: 180
+                ),
+                configuration: configuration,
+                apiKey: apiKey
+            )
+            guard
+                let payload: SemanticPlayPayload = decodeLLMJSONPayload(from: generation.outputText),
+                let rawIntent = payload.intent?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                let intent = normalizedSemanticIntent(rawIntent),
+                intent != .auto,
+                let query = payload.query?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !query.isEmpty
+            else {
+                return nil
+            }
+            let confidence = payload.confidence ?? 0.5
+            if confidence < 0.45 {
+                return nil
+            }
+            return SemanticPlayDecision(
+                query: query,
+                intent: intent,
+                confidence: confidence,
+                reason: payload.reason
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private static func normalizedSemanticIntent(_ rawIntent: String) -> PlayIntent? {
+        switch rawIntent {
+        case "song":
+            return .song
+        case "album":
+            return .album
+        case "mood", "scene", "vibe", "artist":
+            return .mood
+        default:
+            return nil
+        }
+    }
+
+    private static func semanticModelConfiguration(
+        context: V4ToolExecutionContext,
+        modelSlotManager: V4ModelSlotManager?
+    ) async -> TextGenerationProviderConfiguration? {
+        do {
+            let endpoint: V4ModelEndpoint
+            if let resolved = context.request.modelSlots?.endpoint(for: .text) {
+                endpoint = resolved
+            } else if let modelSlotManager {
+                endpoint = try await modelSlotManager.resolve(.text)
+            } else {
+                return nil
+            }
+            guard let baseURL = URL(string: endpoint.baseURLString) else {
+                return nil
+            }
+            return TextGenerationProviderConfiguration(
+                profileID: endpoint.credentialRef?.rawValue ?? endpoint.sourceConfigurationKey,
+                providerType: endpoint.providerType,
+                providerName: endpoint.providerDisplayName,
+                modelName: endpoint.modelName,
+                baseURL: baseURL
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private static func semanticModelConfiguration(
+        modelSlotManager: V4ModelSlotManager?
+    ) async -> TextGenerationProviderConfiguration? {
+        guard let modelSlotManager else {
+            return nil
+        }
+        do {
+            let endpoint = try await modelSlotManager.resolve(.text)
+            guard let baseURL = URL(string: endpoint.baseURLString) else {
+                return nil
+            }
+            return TextGenerationProviderConfiguration(
+                profileID: endpoint.credentialRef?.rawValue ?? endpoint.sourceConfigurationKey,
+                providerType: endpoint.providerType,
+                providerName: endpoint.providerDisplayName,
+                modelName: endpoint.modelName,
+                baseURL: baseURL
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private static func semanticModelAPIKey(
+        context: V4ToolExecutionContext,
+        modelSlotManager: V4ModelSlotManager?
+    ) async -> String? {
+        guard let modelSlotManager else {
+            return nil
+        }
+        do {
+            if context.request.modelSlots?.endpoint(for: .text) != nil {
+                return try await modelSlotManager.loadAPIKey(for: .text)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return try await modelSlotManager.loadAPIKey(for: .text)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func semanticModelAPIKey(
+        modelSlotManager: V4ModelSlotManager?
+    ) async -> String? {
+        guard let modelSlotManager else {
+            return nil
+        }
+        do {
+            return try await modelSlotManager.loadAPIKey(for: .text)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func decodeLLMJSONPayload<T: Decodable>(from output: String) -> T? {
+        let stripped = output
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"^```(?:json)?\s*"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*```$"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard
+            let firstBrace = stripped.firstIndex(of: "{"),
+            let lastBrace = stripped.lastIndex(of: "}"),
+            firstBrace <= lastBrace
+        else {
+            return nil
+        }
+        let jsonText = String(stripped[firstBrace ... lastBrace])
+        guard let data = jsonText.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
+
+    private static func liveExecuteHandler(
+        modelSlotManager: V4ModelSlotManager?,
+        generationProvider: any TextGenerationProvider
+    ) -> ExecuteHandler {
+        { command in
+            guard MagicianMusicCapability.musicAppAvailable else {
+                throw V4ToolErrorCatalog().bridgeNotReady(
+                    toolID: "apple.music.control",
+                    userMessage: "Music 不可用，请先打开音乐应用。",
+                    debugMessage: "music app unavailable",
+                    recoverAction: "open_music_app"
+                )
+            }
+
+            let warmup = await runOsaScript(
+                lines: [
+                    "tell application \"Music\"",
+                ] + magicianEnsureApplicationReadyAppleScriptLines(activate: false, timeoutSeconds: 12) + [
+                    "set ready to false",
+                    "repeat with idx from 1 to 6",
+                    "try",
+                    "set _count to (count of tracks of library playlist 1)",
+                    "set ready to true",
+                    "exit repeat",
+                    "on error",
+                    "delay 0.08",
+                    "end try",
+                    "end repeat",
+                    "if ready then return \"library_ready\"",
+                    "return \"library_pending\"",
+                    "end tell"
+                ],
+                arguments: [],
+                timeoutSeconds: 7
+            )
+            guard warmup.exitCode == 0 else {
+                let recoverAction = magicianLooksLikeAutomationPermissionDenied(warmup.detail)
+                    ? "open_music_automation_permission"
+                    : "open_music_app"
+                throw V4ToolErrorCatalog().executionFailure(
+                    toolID: "apple.music.control",
+                    userMessage: "Music 启动失败，请确认应用可正常打开后再试。",
+                    debugMessage: warmup.detail,
+                    recoverAction: recoverAction
+                )
+            }
+
+            let process = await runLiveCommand(
+                command,
+                modelSlotManager: modelSlotManager,
+                generationProvider: generationProvider
+            )
+            guard process.exitCode == 0 else {
+                let recoverAction = magicianLooksLikeAutomationPermissionDenied(process.detail)
+                    ? "open_music_automation_permission"
+                    : "open_music_app"
+                throw V4ToolErrorCatalog().executionFailure(
+                    toolID: "apple.music.control",
+                    userMessage: "音乐控制失败，请确认 Music 已启动且曲库可访问后再试。",
+                    debugMessage: process.detail,
+                    recoverAction: recoverAction
+                )
+            }
+
+            let output = process.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            var normalizedOutput = output
+            if command.action == .open {
+                return ResultPayload(
+                    action: .open,
+                    state: "open",
+                    track: nil,
+                    artist: nil,
+                    evidence: output.isEmpty ? "state=open" : output
+                )
+            }
+            if command.action == .play, let query = command.query, !query.isEmpty {
+                if output.hasPrefix("search_opened|") {
+                    return ResultPayload(
+                        action: .open,
+                        state: "open_search",
+                        track: nil,
+                        artist: nil,
+                        evidence: output
+                    )
+                }
+                if output == "track_not_found" {
+                    let message = if command.playIntent == .album {
+                        "未在 Music 搜索里找到该专辑，请确认专辑名后再试。"
+                    } else {
+                        "未在 Music 搜索里找到这首歌，请确认歌名后再试。"
+                    }
+                    throw V4ToolErrorCatalog().executionFailure(
+                        toolID: "apple.music.control",
+                        userMessage: message,
+                        debugMessage: "no matched track for query: \(query)",
+                        recoverAction: "open_music_app",
+                        isRetryable: false
+                    )
+                }
+                let matchesEvidence: Bool = {
+                    if command.playIntent == .album {
+                        return albumEvidenceMatchesQuery(output: output, query: query)
+                    }
+                    if Self.isMoodDiscoveryQuery(query) {
+                        return true
+                    }
+                    return magicianMusicEvidenceMatchesQuery(output: output, query: query)
+                }()
+                if !matchesEvidence {
+                    normalizedOutput = Self.normalizedPlaybackEvidenceForMismatch(
+                        rawOutput: output,
+                        query: query,
+                        action: command.action
+                    )
+                }
+            }
+
+            let parsed = parseEvidence(normalizedOutput)
+            return ResultPayload(
+                action: command.action,
+                state: parsed.state ?? command.action.rawValue,
+                track: parsed.track,
+                artist: parsed.artist,
+                evidence: normalizedOutput.isEmpty ? "state=\(command.action.rawValue)" : normalizedOutput
+            )
+        }
+    }
+
+    private static func runLiveCommand(
+        _ command: Command,
+        modelSlotManager: V4ModelSlotManager?,
+        generationProvider: any TextGenerationProvider
+    ) async -> MagicianProcessResult {
+        switch command.action {
+        case .open:
+            await libraryOrderSessionCoordinator.cancel()
+            return await runOsaScript(
+                lines: [
+                    "tell application \"Music\"",
+                ] + magicianEnsureApplicationReadyAppleScriptLines() + [
+                    "return \"state=open\"",
+                    "end tell"
+                ],
+                arguments: []
+            )
+
+        case .play:
+            if let query = command.query, !query.isEmpty {
+                if let llmResult = await runLibraryIndexSelectionAndPlay(
+                    query: query,
+                    rawCommand: command.rawCommand,
+                    playIntent: command.playIntent,
+                    modelSlotManager: modelSlotManager,
+                    generationProvider: generationProvider
+                ) {
+                    return llmResult
+                }
+                return MagicianProcessResult(exitCode: 0, stdout: "track_not_found", stderr: "library_only_mode")
+            }
+            await libraryOrderSessionCoordinator.cancel()
+            return await runOsaScript(
+                lines: [
+                    "tell application \"Music\"",
+                ] + magicianEnsureApplicationReadyAppleScriptLines(activate: false)
+                    + libraryOrderedPlaybackSetupAppleScriptLines(anchorToLibraryQueue: true)
+                    + [
+                    "play",
+                    "return \"state=play|queue_mode=library_order\"",
+                    "end tell"
+                ],
+                arguments: []
+            )
+
+        case .pause:
+            return await runOsaScript(
+                lines: [
+                    "tell application \"Music\"",
+                ] + magicianEnsureApplicationReadyAppleScriptLines(activate: false) + [
+                    "pause",
+                    "return \"state=pause\"",
+                    "end tell"
+                ],
+                arguments: []
+            )
+
+        case .resume:
+            return await runOsaScript(
+                lines: [
+                    "tell application \"Music\"",
+                ] + magicianEnsureApplicationReadyAppleScriptLines(activate: false)
+                    + libraryOrderedPlaybackSetupAppleScriptLines()
+                    + [
+                    "play",
+                    "return \"state=resume|queue_mode=library_order\"",
+                    "end tell"
+                ],
+                arguments: []
+            )
+
+        case .next:
+            return await runLibraryOrderedStep(direction: "next")
+
+        case .previous:
+            return await runLibraryOrderedStep(direction: "previous")
+        }
+    }
+
+    private static func runLibraryOrderedStep(direction: String) async -> MagicianProcessResult {
+        guard let snapshot = await loadLibraryCatalogSnapshot(), !snapshot.tracks.isEmpty else {
+            return MagicianProcessResult(exitCode: 1, stdout: "", stderr: "library_empty")
+        }
+
+        let action: Action = direction == "next" ? .next : .previous
+        let currentTrackID = await currentTrackPersistentID()
+        guard
+            let targetTrack = adjacentLibraryTrack(
+                currentPersistentID: currentTrackID,
+                direction: action,
+                tracks: snapshot.tracks
+            )
+        else {
+            return MagicianProcessResult(exitCode: 1, stdout: "", stderr: "library_empty")
+        }
+
+        let playResult = await playTrackByPersistentID(targetTrack.persistentID, snapshot: snapshot)
+        guard let verifiedResult = await resolveAcceptedPlaybackResult(
+            initialResult: playResult,
+            targetID: targetTrack.persistentID,
+            query: targetTrack.name,
+            playIntent: .song
+        ) else {
+            return MagicianProcessResult(
+                exitCode: 1,
+                stdout: playResult.stdout,
+                stderr: playResult.stderr.isEmpty ? "library_order_transition_mismatch" : playResult.stderr
+            )
+        }
+
+        let annotatedOutput = annotatedTransitionPlaybackOutput(
+            verifiedResult.stdout,
+            transitionState: direction
+        ) + "|strategy=library_order|index_revision=\(snapshot.revision)"
+        if let rotatedTracks = rotatedLibraryTracks(
+            startingAtPersistentID: targetTrack.persistentID,
+            tracks: snapshot.tracks
+        ) {
+            await libraryOrderSessionCoordinator.replaceSession(
+                orderedTrackIDs: rotatedTracks.map(\.persistentID),
+                revision: snapshot.revision
+            )
+        }
+        return MagicianProcessResult(
+            exitCode: 0,
+            stdout: annotatedOutput,
+            stderr: verifiedResult.stderr
+        )
+    }
+
+    private static func runLibraryIndexSelectionAndPlay(
+        query: String,
+        rawCommand: String,
+        playIntent: PlayIntent,
+        modelSlotManager: V4ModelSlotManager?,
+        generationProvider: any TextGenerationProvider
+    ) async -> MagicianProcessResult? {
+        guard let snapshot = await loadLibraryCatalogSnapshot() else {
+            return nil
+        }
+        let tracks = snapshot.tracks
+        guard !tracks.isEmpty else {
+            return nil
+        }
+
+        guard let decision = await resolveLibraryTrackSelection(
+            query: query,
+            rawCommand: rawCommand,
+            playIntent: playIntent,
+            tracks: tracks,
+            modelSlotManager: modelSlotManager,
+            generationProvider: generationProvider
+        ) else {
+            return nil
+        }
+
+        return await playSelectedLibraryTrack(
+            decision,
+            query: query,
+            playIntent: playIntent,
+            snapshot: snapshot
+        )
+    }
+
+    private static func playSelectedLibraryTrack(
+        _ decision: LibraryTrackSelectionDecision,
+        query: String,
+        playIntent: PlayIntent,
+        snapshot: LibraryCatalogSnapshot
+    ) async -> MagicianProcessResult {
+        let selectedTrack = decision.track
+        let playResult = await playTrackByPersistentID(selectedTrack.persistentID, snapshot: snapshot)
+        guard let verifiedResult = await resolveAcceptedPlaybackResult(
+            initialResult: playResult,
+            targetID: selectedTrack.persistentID,
+            query: query,
+            playIntent: playIntent
+        ) else {
+            return MagicianProcessResult(
+                exitCode: 1,
+                stdout: playResult.stdout,
+                stderr: playResult.stderr.isEmpty
+                    ? "library_playback_verification_failed|target_id=\(selectedTrack.persistentID)|query=\(query)"
+                    : playResult.stderr
+            )
+        }
+        if let rotatedTracks = rotatedLibraryTracks(
+            startingAtPersistentID: selectedTrack.persistentID,
+            tracks: snapshot.tracks
+        ) {
+            await libraryOrderSessionCoordinator.replaceSession(
+                orderedTrackIDs: rotatedTracks.map(\.persistentID),
+                revision: snapshot.revision
+            )
+        }
+        var evidence = verifiedResult.stdout
+            + "|strategy=\(decision.strategy)"
+            + "|selection_source=\(decision.source)"
+            + "|index_revision=\(snapshot.revision)"
+        if let confidence = decision.confidence {
+            evidence += "|selection_confidence=\(String(format: "%.2f", confidence))"
+        }
+        if let reason = decision.reason?
+            .replacingOccurrences(of: "|", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !reason.isEmpty
+        {
+            evidence += "|selection_reason=\(reason)"
+        }
+        return MagicianProcessResult(exitCode: 0, stdout: evidence, stderr: verifiedResult.stderr)
+    }
+
+    private static func resolveLibraryTrackSelection(
+        query: String,
+        rawCommand: String,
+        playIntent: PlayIntent,
+        tracks: [LibraryTrackRecord],
+        modelSlotManager: V4ModelSlotManager?,
+        generationProvider: any TextGenerationProvider
+    ) async -> LibraryTrackSelectionDecision? {
+        if let localTrack = preferredLocalTrack(
+            query: query,
+            rawCommand: rawCommand,
+            playIntent: playIntent,
+            tracks: tracks
+        ) {
+            return LibraryTrackSelectionDecision(
+                track: localTrack,
+                strategy: "library_local_exact",
+                confidence: 1,
+                reason: "local-exact"
+            )
+        }
+
+        if
+            let configuration = await semanticModelConfiguration(modelSlotManager: modelSlotManager),
+            let apiKey = await semanticModelAPIKey(modelSlotManager: modelSlotManager),
+            !apiKey.isEmpty || !configuration.providerType.requiresAPIKey
+        {
+            if tracks.count <= 280 {
+                if let decision = await selectTrackDecisionFromLibraryBlock(
+                    query: query,
+                    rawCommand: rawCommand,
+                    playIntent: playIntent,
+                    tracks: tracks,
+                    configuration: configuration,
+                    apiKey: apiKey,
+                    generationProvider: generationProvider
+                ) {
+                    return decision
+                }
+            } else if let decision = await selectTrackDecisionFromFullLibraryBatches(
+                query: query,
+                rawCommand: rawCommand,
+                playIntent: playIntent,
+                tracks: tracks,
+                configuration: configuration,
+                apiKey: apiKey,
+                generationProvider: generationProvider
+            ) {
+                return decision
+            }
+        }
+
+        guard let fallbackTrack = selectDeterministicTrack(
+            query: query,
+            rawCommand: rawCommand,
+            playIntent: playIntent,
+            tracks: tracks
+        ) else {
+            return nil
+        }
+        return LibraryTrackSelectionDecision(
+            track: fallbackTrack,
+            strategy: "library_local_index_fallback",
+            confidence: nil,
+            reason: "local-fallback"
+        )
+    }
+
+    private static func selectTrackDecisionFromFullLibraryBatches(
+        query: String,
+        rawCommand: String,
+        playIntent: PlayIntent,
+        tracks: [LibraryTrackRecord],
+        configuration: TextGenerationProviderConfiguration,
+        apiKey: String,
+        generationProvider: any TextGenerationProvider
+    ) async -> LibraryTrackSelectionDecision? {
+        let batchSize = 240
+        var topCandidates: [LibraryTrackSelectionDecision] = []
+        var index = 0
+        while index < tracks.count {
+            let end = min(index + batchSize, tracks.count)
+            let block = Array(tracks[index..<end])
+            if let decision = await selectTrackDecisionFromLibraryBlock(
+                query: query,
+                rawCommand: rawCommand,
+                playIntent: playIntent,
+                tracks: block,
+                configuration: configuration,
+                apiKey: apiKey,
+                generationProvider: generationProvider
+            ) {
+                topCandidates.append(decision)
+            }
+            index = end
+        }
+
+        let rankedCandidates = topCandidates.sorted { lhs, rhs in
+            let lhsConfidence = lhs.confidence ?? 0
+            let rhsConfidence = rhs.confidence ?? 0
+            if lhsConfidence != rhsConfidence {
+                return lhsConfidence > rhsConfidence
+            }
+            return lhs.track.name < rhs.track.name
+        }
+
+        var deduplicated: [LibraryTrackRecord] = []
+        var seen = Set<String>()
+        for candidate in rankedCandidates {
+            if seen.insert(candidate.track.persistentID).inserted {
+                deduplicated.append(candidate.track)
+            }
+        }
+        if deduplicated.isEmpty {
+            return nil
+        }
+        if deduplicated.count == 1 {
+            return LibraryTrackSelectionDecision(
+                track: deduplicated[0],
+                strategy: "library_llm_index_only",
+                confidence: rankedCandidates.first?.confidence,
+                reason: rankedCandidates.first?.reason
+            )
+        }
+        return await selectTrackDecisionFromLibraryBlock(
+            query: query,
+            rawCommand: rawCommand,
+            playIntent: playIntent,
+            tracks: deduplicated,
+            configuration: configuration,
+            apiKey: apiKey,
+            generationProvider: generationProvider
+        ) ?? LibraryTrackSelectionDecision(
+            track: deduplicated[0],
+            strategy: "library_local_index_fallback",
+            confidence: nil,
+            reason: "batch-dedup-fallback"
+        )
+    }
+
+    private static func selectTrackDecisionFromLibraryBlock(
+        query: String,
+        rawCommand: String,
+        playIntent: PlayIntent,
+        tracks: [LibraryTrackRecord],
+        configuration: TextGenerationProviderConfiguration,
+        apiKey: String,
+        generationProvider: any TextGenerationProvider
+    ) async -> LibraryTrackSelectionDecision? {
+        guard !tracks.isEmpty else {
+            return nil
+        }
+        let lineLimit = min(tracks.count, 320)
+        let lines = tracks.prefix(lineLimit).enumerated().map { idx, track in
+            "\(idx + 1). id=\(track.persistentID) | song=\(track.name) | artist=\(track.artist) | album=\(track.album)"
+        }.joined(separator: "\n")
+        let systemPrompt = """
+        你是 PulseType 的音乐选曲器。你会收到用户请求和本地资料库曲目列表。
+        每次任务都是全新任务，只能基于这次输入判断，不得引用任何历史对话。
+        规则：
+        1) 必须只从给定列表里选择一首最匹配的歌。
+        2) 严禁输出列表中不存在的 id。
+        3) 点名歌曲时优先按歌名匹配，歌手/专辑仅用于消歧。
+        4) 你只负责选歌，不负责执行播放，也不要生成 AppleScript。
+        5) 只输出 JSON，不要输出解释文字。
+        JSON:
+        {"persistentID":"列表里的id","confidence":0~1,"reason":"一句话"}
+        若没有合适项：
+        {"persistentID":"","confidence":0,"reason":"no-fit"}
+        """
+        let userPrompt = """
+        用户命令：\(rawCommand)
+        解析查询：\(query)
+        意图：\(playIntent.rawValue)
+        列表：
+        \(lines)
+        """
+
+        do {
+            let generation = try await generationProvider.generateText(
+                request: TextGenerationRequest(
+                    systemPrompt: systemPrompt,
+                    userPrompt: userPrompt,
+                    temperature: 0.1,
+                    maxOutputTokens: 220
+                ),
+                configuration: configuration,
+                apiKey: apiKey
+            )
+            guard
+                let payload: LibraryTrackIDPickPayload = decodeLLMJSONPayload(from: generation.outputText),
+                let id = payload.persistentID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !id.isEmpty
+            else {
+                return nil
+            }
+            guard let track = tracks.first(where: { $0.persistentID == id }) else {
+                return nil
+            }
+            return LibraryTrackSelectionDecision(
+                track: track,
+                strategy: "library_llm_index_only",
+                confidence: payload.confidence,
+                reason: payload.reason
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private static func runLibraryRAGSelectionAndPlay(
+        query: String,
+        rawCommand: String,
+        playIntent: PlayIntent,
+        modelSlotManager: V4ModelSlotManager?,
+        generationProvider: any TextGenerationProvider
+    ) async -> MagicianProcessResult? {
+        let tracks = await loadLibraryCatalog()
+        guard !tracks.isEmpty else {
+            return nil
+        }
+
+        let pick: LibraryTrackRecord?
+        if playIntent == .album {
+            var albumCandidates = retrieveAlbumCandidates(query: query, tracks: tracks, limit: tracks.count)
+            if albumCandidates.isEmpty {
+                albumCandidates = retrieveAllAlbumCandidates(tracks: tracks)
+            }
+            guard !albumCandidates.isEmpty else {
+                return nil
+            }
+            let pickedAlbum = await selectAlbumWithRAG(
+                query: query,
+                rawCommand: rawCommand,
+                candidates: albumCandidates,
+                modelSlotManager: modelSlotManager,
+                generationProvider: generationProvider
+            ) ?? albumCandidates.first
+            pick = pickedAlbum.flatMap { randomTrackInAlbum($0, tracks: tracks) }
+        } else {
+            var candidates = retrieveLibraryCandidates(
+                query: query,
+                rawCommand: rawCommand,
+                playIntent: playIntent,
+                tracks: tracks,
+                limit: tracks.count
+            )
+            if candidates.isEmpty {
+                candidates = tracks.map { LibraryTrackCandidate(track: $0, score: 1) }
+            }
+            guard !candidates.isEmpty else {
+                return nil
+            }
+            pick = await selectTrackWithRAG(
+                query: query,
+                rawCommand: rawCommand,
+                playIntent: playIntent,
+                candidates: candidates,
+                modelSlotManager: modelSlotManager,
+                generationProvider: generationProvider
+            ) ?? localFallbackTrack(
+                query: query,
+                playIntent: playIntent,
+                tracks: tracks,
+                candidates: candidates
+            )
+        }
+        guard let pick else {
+            return nil
+        }
+
+        let playResult = await playTrackByPersistentID(pick.persistentID, snapshot: LibraryCatalogSnapshot(
+            generatedAt: Date(),
+            revision: "unknown",
+            tracks: tracks
+        ))
+        guard let verifiedResult = await resolveAcceptedPlaybackResult(
+            initialResult: playResult,
+            targetID: pick.persistentID,
+            query: query,
+            playIntent: playIntent
+        ) else {
+            return nil
+        }
+        if let rotatedTracks = rotatedLibraryTracks(
+            startingAtPersistentID: pick.persistentID,
+            tracks: tracks
+        ) {
+            await libraryOrderSessionCoordinator.replaceSession(
+                orderedTrackIDs: rotatedTracks.map(\.persistentID),
+                revision: "unknown"
+            )
+        }
+        let evidence = verifiedResult.stdout + "|strategy=library_rag"
+        return MagicianProcessResult(exitCode: 0, stdout: evidence, stderr: verifiedResult.stderr)
+    }
+
+    private static func loadLibraryCatalog() async -> [LibraryTrackRecord] {
+        await loadLibraryCatalogSnapshot()?.tracks ?? []
+    }
+
+    private static func loadLibraryCatalogSnapshot() async -> LibraryCatalogSnapshot? {
+        let revision = await fetchLibraryRevision()
+        if let cached = await libraryCatalogCache.load(maxAge: 300, revision: revision) {
+            return LibraryCatalogSnapshot(
+                generatedAt: Date(),
+                revision: revision ?? "unknown",
+                tracks: cached
+            )
+        }
+
+        if
+            let persisted = loadPersistedLibraryCatalog(),
+            let revision,
+            persisted.revision == revision,
+            !persisted.tracks.isEmpty
+        {
+            await libraryCatalogCache.save(persisted.tracks, revision: persisted.revision)
+            return persisted
+        }
+
+        let catalogResult = await fetchLibraryCatalog()
+        guard catalogResult.exitCode == 0 else {
+            return loadPersistedLibraryCatalog()
+        }
+        let tracks = parseLibraryCatalog(catalogResult.stdout)
+        guard !tracks.isEmpty else {
+            return loadPersistedLibraryCatalog()
+        }
+        let snapshot = LibraryCatalogSnapshot(
+            generatedAt: Date(),
+            revision: revision ?? "unknown",
+            tracks: tracks
+        )
+        await libraryCatalogCache.save(tracks, revision: snapshot.revision)
+        persistLibraryCatalog(snapshot)
+        return snapshot
+    }
+
+    private static func libraryIndexFileURL() -> URL {
+        LocalStore.bootstrap().historyDirectory
+            .appendingPathComponent(libraryIndexFileName, isDirectory: false)
+    }
+
+    private static func loadPersistedLibraryCatalog() -> LibraryCatalogSnapshot? {
+        let fileURL = libraryIndexFileURL()
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return nil
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard
+            let data = try? Data(contentsOf: fileURL),
+            let snapshot = try? decoder.decode(LibraryCatalogSnapshot.self, from: data),
+            !snapshot.tracks.isEmpty
+        else {
+            return nil
+        }
+        return snapshot
+    }
+
+    private static func persistLibraryCatalog(_ snapshot: LibraryCatalogSnapshot) {
+        let fileURL = libraryIndexFileURL()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(snapshot) else {
+            return
+        }
+        try? data.write(to: fileURL, options: .atomic)
+    }
+
+    private static func fetchLibraryRevision() async -> String? {
+        let probe = await runOsaScript(
+            lines: [
+                "tell application \"Music\"",
+            ] + magicianEnsureApplicationReadyAppleScriptLines(activate: false) + [
+                "set allTracks to tracks of library playlist 1",
+                "set totalCount to count of allTracks",
+                "if totalCount is 0 then return \"count=0|first=none|last=none\"",
+                "set firstTrack to item 1 of allTracks",
+                "set lastTrack to item totalCount of allTracks",
+                "set firstID to (persistent ID of firstTrack) as string",
+                "set lastID to (persistent ID of lastTrack) as string",
+                "return \"count=\" & totalCount & \"|first=\" & firstID & \"|last=\" & lastID",
+                "end tell"
+            ],
+            arguments: [],
+            timeoutSeconds: 8
+        )
+        guard probe.exitCode == 0 else {
+            return nil
+        }
+        let value = probe.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    private static func retrieveLibraryCandidates(
+        query: String,
+        rawCommand: String,
+        playIntent: PlayIntent,
+        tracks: [LibraryTrackRecord],
+        limit: Int
+    ) -> [LibraryTrackCandidate] {
+        let searchTexts = magicianMusicSearchQueries(from: query)
+        let normalizedQueries = searchTexts
+            .map(normalizedMusicMatchText)
+            .filter { !$0.isEmpty }
+        let rawNormalized = normalizedMusicMatchText(rawCommand)
+        let isAlbumIntent = playIntent == .album || rawCommand.lowercased().contains("专辑")
+
+        var scored: [LibraryTrackCandidate] = []
+        scored.reserveCapacity(min(tracks.count, limit * 3))
+
+        for track in tracks {
+            let normalizedName = normalizedMusicMatchText(track.name)
+            let normalizedArtist = normalizedMusicMatchText(track.artist)
+            let normalizedAlbum = normalizedMusicMatchText(track.album)
+            let combined = normalizedName + normalizedArtist + normalizedAlbum
+            guard !combined.isEmpty else {
+                continue
+            }
+
+            var bestScore = 0
+            for nq in normalizedQueries {
+                var score = 0
+                if nq == normalizedName {
+                    score += 140
+                } else if !nq.isEmpty, normalizedName.contains(nq) {
+                    score += 105
+                }
+                if isAlbumIntent {
+                    if nq == normalizedAlbum {
+                        score += 135
+                    } else if !nq.isEmpty, normalizedAlbum.contains(nq) {
+                        score += 100
+                    }
+                } else {
+                    if !nq.isEmpty, normalizedAlbum.contains(nq) {
+                        score += 45
+                    }
+                }
+                if !nq.isEmpty, normalizedArtist.contains(nq) {
+                    score += 35
+                }
+                let parts = queryParts(from: nq)
+                if !parts.isEmpty {
+                    let hitCount = parts.reduce(0) { $0 + (combined.contains($1) ? 1 : 0) }
+                    score += hitCount * 14
+                }
+                bestScore = max(bestScore, score)
+            }
+
+            if bestScore == 0, !rawNormalized.isEmpty {
+                if combined.contains(rawNormalized) {
+                    bestScore = 80
+                }
+            }
+
+            if bestScore > 0 {
+                scored.append(LibraryTrackCandidate(track: track, score: bestScore))
+            }
+        }
+
+        let sorted = scored.sorted { lhs, rhs in
+            if lhs.score != rhs.score {
+                return lhs.score > rhs.score
+            }
+            return lhs.track.name < rhs.track.name
+        }
+        return Array(sorted.prefix(limit))
+    }
+
+    private static func retrieveAlbumCandidates(
+        query: String,
+        tracks: [LibraryTrackRecord],
+        limit: Int
+    ) -> [LibraryAlbumCandidate] {
+        let groups = groupAlbums(tracks: tracks)
+        let normalizedQueries = magicianMusicSearchQueries(from: query)
+            .map(normalizedMusicMatchText)
+            .filter { !$0.isEmpty }
+        guard !normalizedQueries.isEmpty else {
+            return retrieveAllAlbumCandidates(tracks: tracks)
+        }
+
+        var results: [LibraryAlbumCandidate] = []
+        for album in groups {
+            let normalizedAlbum = normalizedMusicMatchText(album.album)
+            let normalizedArtist = normalizedMusicMatchText(album.artist)
+            var best = 0
+            for q in normalizedQueries {
+                var score = 0
+                if normalizedAlbum == q {
+                    score += 160
+                } else if normalizedAlbum.contains(q) || q.contains(normalizedAlbum) {
+                    score += 120
+                }
+                if normalizedArtist.contains(q) {
+                    score += 40
+                }
+                let parts = queryParts(from: q)
+                if !parts.isEmpty, parts.allSatisfy({ normalizedAlbum.contains($0) || normalizedArtist.contains($0) }) {
+                    score += 30
+                }
+                best = max(best, score)
+            }
+            if best > 0 {
+                results.append(
+                    LibraryAlbumCandidate(
+                        key: album.key,
+                        album: album.album,
+                        artist: album.artist,
+                        trackIDs: album.trackIDs,
+                        score: best
+                    )
+                )
+            }
+        }
+        let sorted = results.sorted { lhs, rhs in
+            if lhs.score != rhs.score {
+                return lhs.score > rhs.score
+            }
+            if lhs.artist != rhs.artist {
+                return lhs.artist < rhs.artist
+            }
+            return lhs.album < rhs.album
+        }
+        return Array(sorted.prefix(limit))
+    }
+
+    private static func retrieveAllAlbumCandidates(tracks: [LibraryTrackRecord]) -> [LibraryAlbumCandidate] {
+        groupAlbums(tracks: tracks)
+            .map {
+                LibraryAlbumCandidate(
+                    key: $0.key,
+                    album: $0.album,
+                    artist: $0.artist,
+                    trackIDs: $0.trackIDs,
+                    score: 1
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.artist != rhs.artist {
+                    return lhs.artist < rhs.artist
+                }
+                return lhs.album < rhs.album
+            }
+    }
+
+    private static func groupAlbums(tracks: [LibraryTrackRecord]) -> [(key: String, album: String, artist: String, trackIDs: [String])] {
+        var map: [String: (album: String, artist: String, trackIDs: [String])] = [:]
+        for track in tracks {
+            let key = "\(normalizedMusicMatchText(track.artist))::\(normalizedMusicMatchText(track.album))"
+            guard !key.hasSuffix("::"), !key.isEmpty else {
+                continue
+            }
+            if var value = map[key] {
+                value.trackIDs.append(track.persistentID)
+                map[key] = value
+            } else {
+                map[key] = (album: track.album, artist: track.artist, trackIDs: [track.persistentID])
+            }
+        }
+        return map.map { (key: $0.key, album: $0.value.album, artist: $0.value.artist, trackIDs: Array(Set($0.value.trackIDs))) }
+    }
+
+    private static func selectAlbumWithRAG(
+        query: String,
+        rawCommand: String,
+        candidates: [LibraryAlbumCandidate],
+        modelSlotManager: V4ModelSlotManager?,
+        generationProvider: any TextGenerationProvider
+    ) async -> LibraryAlbumCandidate? {
+        guard
+            let configuration = await semanticModelConfiguration(modelSlotManager: modelSlotManager),
+            let apiKey = await semanticModelAPIKey(modelSlotManager: modelSlotManager),
+            !apiKey.isEmpty || !configuration.providerType.requiresAPIKey
+        else {
+            return nil
+        }
+
+        let candidateList = candidates.enumerated().map { idx, item in
+            "\(idx + 1). entity=album | albumKey=\(item.key) | album=\(item.album) | artist=\(item.artist) | tracks=\(item.trackIDs.count) | score=\(item.score)"
+        }.joined(separator: "\n")
+
+        let systemPrompt = """
+        你是 PulseType 的专辑选择器。你会收到用户请求和一组去重后的本地专辑候选。
+        只能从候选里选 1 个专辑。
+        只输出 JSON，不要解释。
+        JSON:
+        {"albumKey":"候选中的albumKey","confidence":0~1,"reason":"一句话"}
+        无法判断时：
+        {"albumKey":"","confidence":0,"reason":"no-fit"}
+        """
+        let userPrompt = """
+        用户命令：\(rawCommand)
+        专辑查询词：\(query)
+        候选专辑：
+        \(candidateList)
+        """
+
+        do {
+            let generation = try await generationProvider.generateText(
+                request: TextGenerationRequest(
+                    systemPrompt: systemPrompt,
+                    userPrompt: userPrompt,
+                    temperature: 0.1,
+                    maxOutputTokens: 180
+                ),
+                configuration: configuration,
+                apiKey: apiKey
+            )
+            guard
+                let payload: RagAlbumPickPayload = decodeLLMJSONPayload(from: generation.outputText),
+                let albumKey = payload.albumKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !albumKey.isEmpty,
+                (payload.confidence ?? 0.5) >= 0.35
+            else {
+                return nil
+            }
+            return candidates.first(where: { $0.key == albumKey })
+        } catch {
+            return nil
+        }
+    }
+
+    private static func randomTrackInAlbum(
+        _ album: LibraryAlbumCandidate,
+        tracks: [LibraryTrackRecord]
+    ) -> LibraryTrackRecord? {
+        let trackSet = Set(album.trackIDs)
+        let albumTracks = tracks.filter { trackSet.contains($0.persistentID) }
+        return albumTracks.first
+    }
+
+    private static func localFallbackTrack(
+        query: String,
+        playIntent: PlayIntent,
+        tracks: [LibraryTrackRecord],
+        candidates: [LibraryTrackCandidate]
+    ) -> LibraryTrackRecord? {
+        if playIntent == .album, let albumTrack = pickTrackFromAlbum(query: query, tracks: tracks) {
+            return albumTrack
+        }
+        return candidates.first?.track
+    }
+
+    static func preferredLocalTrack(
+        query: String,
+        rawCommand: String,
+        playIntent: PlayIntent,
+        tracks: [LibraryTrackRecord]
+    ) -> LibraryTrackRecord? {
+        guard !tracks.isEmpty else {
+            return nil
+        }
+        switch playIntent {
+        case .song:
+            return exactLocalSongMatch(query: query, rawCommand: rawCommand, tracks: tracks)
+        case .album:
+            return exactLocalAlbumMatch(query: query, tracks: tracks)
+        case .auto, .mood:
+            return nil
+        }
+    }
+
+    private static func exactLocalSongMatch(
+        query: String,
+        rawCommand: String,
+        tracks: [LibraryTrackRecord]
+    ) -> LibraryTrackRecord? {
+        let normalizedQueries = magicianMusicSearchQueries(from: query)
+            .map(normalizedMusicMatchText)
+            .filter { !$0.isEmpty }
+        guard !normalizedQueries.isEmpty else {
+            return nil
+        }
+
+        let artistHints = songArtistHints(from: query, rawCommand: rawCommand)
+        let exactNameMatches = tracks.filter { track in
+            let normalizedName = normalizedMusicMatchText(track.name)
+            return normalizedQueries.contains(normalizedName)
+        }
+        guard !exactNameMatches.isEmpty else {
+            return nil
+        }
+        if exactNameMatches.count == 1 {
+            return exactNameMatches.first
+        }
+        if !artistHints.isEmpty {
+            let narrowed = exactNameMatches.filter { track in
+                let artist = normalizedMusicMatchText(track.artist)
+                return artistHints.contains(where: { hint in
+                    artist == hint || artist.contains(hint) || hint.contains(artist)
+                })
+            }
+            if narrowed.count == 1 {
+                return narrowed.first
+            }
+        }
+        return nil
+    }
+
+    private static func exactLocalAlbumMatch(
+        query: String,
+        tracks: [LibraryTrackRecord]
+    ) -> LibraryTrackRecord? {
+        let normalizedQueries = magicianMusicSearchQueries(from: query)
+            .map(normalizedMusicMatchText)
+            .filter { !$0.isEmpty }
+        guard !normalizedQueries.isEmpty else {
+            return nil
+        }
+
+        let albumTracks = tracks.filter { track in
+            let normalizedAlbum = normalizedMusicMatchText(track.album)
+            return normalizedQueries.contains(normalizedAlbum)
+        }
+        guard !albumTracks.isEmpty else {
+            return nil
+        }
+        let grouped = Dictionary(grouping: albumTracks) {
+            "\(normalizedMusicMatchText($0.artist))::\(normalizedMusicMatchText($0.album))"
+        }
+        guard grouped.count == 1 else {
+            return nil
+        }
+        return grouped.values.first?.first
+    }
+
+    private static func songArtistHints(from query: String, rawCommand: String) -> [String] {
+        let splitSource = query.contains("的") ? query : rawCommand
+        let leftHint = splitSource
+            .split(separator: "的", maxSplits: 1)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let hints = [leftHint, query, rawCommand]
+            .compactMap { $0 }
+            .flatMap { magicianMusicSearchQueries(from: $0) }
+            .map(normalizedMusicMatchText)
+            .filter { !$0.isEmpty }
+        var deduped: [String] = []
+        var seen = Set<String>()
+        for hint in hints where hint.count >= 2 {
+            if seen.insert(hint).inserted {
+                deduped.append(hint)
+            }
+        }
+        return deduped
+    }
+
+    static func selectDeterministicTrack(
+        query: String,
+        rawCommand: String,
+        playIntent: PlayIntent,
+        tracks: [LibraryTrackRecord]
+    ) -> LibraryTrackRecord? {
+        guard !tracks.isEmpty else {
+            return nil
+        }
+        guard playIntent != .mood else {
+            return nil
+        }
+        let candidates = retrieveLibraryCandidates(
+            query: query,
+            rawCommand: rawCommand,
+            playIntent: playIntent,
+            tracks: tracks,
+            limit: tracks.count
+        )
+        return localFallbackTrack(
+            query: query,
+            playIntent: playIntent,
+            tracks: tracks,
+            candidates: candidates
+        )
+    }
+
+    static func rotatedLibraryTracks(
+        startingAtPersistentID persistentID: String,
+        tracks: [LibraryTrackRecord]
+    ) -> [LibraryTrackRecord]? {
+        guard
+            let startIndex = tracks.firstIndex(where: { $0.persistentID == persistentID })
+        else {
+            return nil
+        }
+        let head = tracks[startIndex...]
+        let tail = tracks[..<startIndex]
+        return Array(head) + Array(tail)
+    }
+
+    static func adjacentLibraryTrack(
+        currentPersistentID: String?,
+        direction: Action,
+        tracks: [LibraryTrackRecord]
+    ) -> LibraryTrackRecord? {
+        guard !tracks.isEmpty else {
+            return nil
+        }
+        guard let currentPersistentID else {
+            return direction == .previous ? tracks.last : tracks.first
+        }
+        guard let currentIndex = tracks.firstIndex(where: { $0.persistentID == currentPersistentID }) else {
+            return direction == .previous ? tracks.last : tracks.first
+        }
+        let targetIndex: Int
+        switch direction {
+        case .previous:
+            targetIndex = currentIndex == 0 ? tracks.count - 1 : currentIndex - 1
+        case .next:
+            targetIndex = (currentIndex + 1) % tracks.count
+        case .open, .pause, .play, .resume:
+            targetIndex = currentIndex
+        }
+        return tracks[targetIndex]
+    }
+
+    private static func pickTrackFromAlbum(
+        query: String,
+        tracks: [LibraryTrackRecord],
+        exactFirst: Bool = true
+    ) -> LibraryTrackRecord? {
+        let queries = magicianMusicSearchQueries(from: query)
+            .map(normalizedMusicMatchText)
+            .filter { !$0.isEmpty }
+        guard !queries.isEmpty else {
+            return nil
+        }
+
+        var exact: [LibraryTrackRecord] = []
+        var fuzzy: [LibraryTrackRecord] = []
+        for track in tracks {
+            let normalizedAlbum = normalizedMusicMatchText(track.album)
+            guard !normalizedAlbum.isEmpty else {
+                continue
+            }
+            for q in queries {
+                if normalizedAlbum == q {
+                    exact.append(track)
+                    break
+                }
+                if normalizedAlbum.contains(q) || q.contains(normalizedAlbum) {
+                    fuzzy.append(track)
+                    break
+                }
+            }
+        }
+        if exactFirst, let pick = exact.first {
+            return pick
+        }
+        if let pick = exact.first {
+            return pick
+        }
+        if let pick = fuzzy.first {
+            return pick
+        }
+        return nil
+    }
+
+    private static func selectTrackWithRAG(
+        query: String,
+        rawCommand: String,
+        playIntent: PlayIntent,
+        candidates: [LibraryTrackCandidate],
+        modelSlotManager: V4ModelSlotManager?,
+        generationProvider: any TextGenerationProvider
+    ) async -> LibraryTrackRecord? {
+        guard
+            let configuration = await semanticModelConfiguration(modelSlotManager: modelSlotManager),
+            let apiKey = await semanticModelAPIKey(modelSlotManager: modelSlotManager),
+            !apiKey.isEmpty || !configuration.providerType.requiresAPIKey
+        else {
+            return nil
+        }
+
+        let candidateList = candidates.enumerated().map { idx, item in
+            "\(idx + 1). id=\(item.track.persistentID) | song=\(item.track.name) | artist=\(item.track.artist) | album=\(item.track.album) | score=\(item.score)"
+        }.joined(separator: "\n")
+
+        let systemPrompt = """
+        你是 PulseType 的音乐选曲器。你会收到用户请求和一组来自资料库的候选曲目。
+        你必须只在候选里选 1 首最合适的歌。
+        只输出 JSON，不要解释。
+        JSON 格式：
+        {"persistentID":"候选中的id","confidence":0~1,"reason":"一句话"}
+        如果都不合适，返回：
+        {"persistentID":"","confidence":0,"reason":"no-fit"}
+        """
+        let userPrompt = """
+        用户命令：\(rawCommand)
+        检索意图：\(playIntent.rawValue)
+        检索词：\(query)
+        候选曲目：
+        \(candidateList)
+        """
+
+        do {
+            let generation = try await generationProvider.generateText(
+                request: TextGenerationRequest(
+                    systemPrompt: systemPrompt,
+                    userPrompt: userPrompt,
+                    temperature: 0.1,
+                    maxOutputTokens: 180
+                ),
+                configuration: configuration,
+                apiKey: apiKey
+            )
+            guard
+                let payload: RagTrackPickPayload = decodeLLMJSONPayload(from: generation.outputText),
+                let persistentID = payload.persistentID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !persistentID.isEmpty,
+                (payload.confidence ?? 0.5) >= 0.35
+            else {
+                return nil
+            }
+            return candidates.first(where: { $0.track.persistentID == persistentID })?.track
+        } catch {
+            return nil
+        }
+    }
+
+    private static func fetchLibraryCatalog() async -> MagicianProcessResult {
+        await runOsaScript(
+            lines: [
+                "tell application \"Music\"",
+            ] + magicianEnsureApplicationReadyAppleScriptLines(activate: false) + [
+                "set outputText to \"\"",
+                "set allTracks to tracks of library playlist 1",
+                "repeat with t in allTracks",
+                "try",
+                "set pid to (persistent ID of t) as string",
+                "set n to (name of t) as string",
+                "set a to (artist of t) as string",
+                "set al to (album of t) as string",
+                "set outputText to outputText & pid & \"\\t\" & n & \"\\t\" & a & \"\\t\" & al & linefeed",
+                "end try",
+                "end repeat",
+                "return outputText",
+                "end tell"
+            ],
+            arguments: [],
+            timeoutSeconds: 20
+        )
+    }
+
+    private static func parseLibraryCatalog(_ text: String) -> [LibraryTrackRecord] {
+        text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .compactMap { line in
+                let parts = line.components(separatedBy: "\t")
+                guard parts.count >= 4 else {
+                    return nil
+                }
+                return LibraryTrackRecord(
+                    persistentID: parts[0],
+                    name: parts[1],
+                    artist: parts[2],
+                    album: parts[3]
+                )
+            }
+    }
+
+    private static func queryParts(from normalized: String) -> [String] {
+        normalized
+            .split(separator: "的")
+            .map(String.init)
+            .filter { $0.count >= 2 }
+    }
+
+    private static func playTrackByPersistentID(
+        _ persistentID: String,
+        snapshot: LibraryCatalogSnapshot? = nil
+    ) async -> MagicianProcessResult {
+        if
+            let snapshot,
+            await libraryOrderSessionCoordinator.canReuseQueue(
+                for: persistentID,
+                revision: snapshot.revision
+            ),
+            let reused = await playTrackByPersistentIDInExistingQueue(
+                persistentID,
+                snapshot: snapshot
+            )
+        {
+            return reused
+        }
+
+        return await runOsaScript(
+            lines: [
+                "on run argv",
+                "set targetPID to item 1 of argv",
+                "set queueName to item 2 of argv",
+                "tell application \"Music\"",
+            ] + magicianEnsureApplicationReadyAppleScriptLines(activate: false)
+                + [
+                "try",
+                "set fixed indexing to true",
+                "end try"
+                ]
+                + libraryOrderedPlaybackSetupAppleScriptLines()
+                + [
+                "set allTracks to tracks of library playlist 1",
+                "set totalCount to count of allTracks",
+                "set targetTrack to missing value",
+                "set targetIndex to 0",
+                "repeat with idx from 1 to totalCount",
+                "set t to item idx of allTracks",
+                "try",
+                "if ((persistent ID of t) as string) is targetPID then",
+                "set targetTrack to t",
+                "set targetIndex to idx",
+                "exit repeat",
+                "end if",
+                "end try",
+                "end repeat",
+                "if targetTrack is missing value then",
+                "return \"track_not_found|target_id=\" & targetPID",
+                "end if",
+                "set targetName to (name of targetTrack) as string",
+                "set targetArtist to (artist of targetTrack) as string",
+                "set targetAlbum to (album of targetTrack) as string",
+                "if not (exists user playlist queueName) then",
+                "make new user playlist with properties {name:queueName}",
+                "end if",
+                "set queuePlaylist to user playlist queueName",
+                "try",
+                "delete every track of queuePlaylist",
+                "on error",
+                "repeat while (count of tracks of queuePlaylist) > 0",
+                "delete item 1 of tracks of queuePlaylist",
+                "end repeat",
+                "end try",
+                "repeat with offsetIndex from 0 to (totalCount - 1)",
+                "set sourceIndex to targetIndex + offsetIndex",
+                "if sourceIndex > totalCount then set sourceIndex to sourceIndex - totalCount",
+                "duplicate (item sourceIndex of allTracks) to queuePlaylist",
+                "end repeat",
+                "set queueCount to count of tracks of queuePlaylist",
+                "if queueCount is 0 then",
+                "return \"queue_build_failed|target_id=\" & targetPID",
+                "end if",
+                "set finalState to \"unknown\"",
+                "set lastNowName to \"\"",
+                "set lastNowArtist to \"\"",
+                "set lastNowAlbum to \"\"",
+                "set lastNowID to \"\"",
+                "set lastMetadataMatch to false",
+                "play queuePlaylist",
+                "repeat with attemptIndex from 1 to 8",
+                "delay 0.42",
+                "set finalState to (player state as string)",
+                "try",
+                "set nowTrack to current track",
+                "set lastNowName to (name of nowTrack) as string",
+                "set lastNowArtist to (artist of nowTrack) as string",
+                "set lastNowAlbum to (album of nowTrack) as string",
+                "set lastNowID to (persistent ID of nowTrack) as string",
+                "set lastMetadataMatch to ((lastNowName is targetName) and (lastNowArtist is targetArtist))",
+                "if lastNowID is targetPID then",
+                "return \"track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|queue_mode=library_order|queue_lock=playlist_rotation|queue_playlist=\" & queueName & \"|queue_count=\" & queueCount & \"|target_index=\" & targetIndex & \"|target_id=\" & targetPID & \"|resolved_id=\" & lastNowID & \"|target_id_match=true|metadata_match=true\"",
+                "end if",
+                "if lastMetadataMatch then",
+                "return \"track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|queue_mode=library_order|queue_lock=playlist_rotation|queue_playlist=\" & queueName & \"|queue_count=\" & queueCount & \"|target_index=\" & targetIndex & \"|target_id=\" & targetPID & \"|resolved_id=\" & lastNowID & \"|target_id_match=false|metadata_match=true|resolved_id_substituted=true\"",
+                "end if",
+                "end try",
+                "if attemptIndex is 4 then",
+                "try",
+                "play queuePlaylist",
+                "end try",
+                "end if",
+                "end repeat",
+                "if lastNowName is not \"\" then",
+                "return \"track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|queue_mode=library_order|queue_lock=playlist_rotation|queue_playlist=\" & queueName & \"|queue_count=\" & queueCount & \"|target_index=\" & targetIndex & \"|target_id=\" & targetPID & \"|resolved_id=\" & lastNowID & \"|play_mismatch=true|target_id_match=false|metadata_match=\" & (lastMetadataMatch as string)",
+                "end if",
+                "return \"play_mismatch|state=\" & finalState & \"|target_id=\" & targetPID & \"|target_name=\" & targetName & \"|target_artist=\" & targetArtist & \"|target_album=\" & targetAlbum",
+                "end tell",
+                "end run"
+            ],
+            arguments: [persistentID, Self.lockedQueuePlaylistName],
+            timeoutSeconds: 90
+        )
+    }
+
+    private static func playTrackByPersistentIDInExistingQueue(
+        _ persistentID: String,
+        snapshot: LibraryCatalogSnapshot
+    ) async -> MagicianProcessResult? {
+        guard
+            let targetTrack = snapshot.tracks.first(where: {
+                $0.persistentID.caseInsensitiveCompare(persistentID) == .orderedSame
+            }),
+            let targetIndex = snapshot.tracks.firstIndex(where: {
+                $0.persistentID.caseInsensitiveCompare(persistentID) == .orderedSame
+            })
+        else {
+            return nil
+        }
+
+        let result = await runOsaScript(
+            lines: [
+                "on run argv",
+                "set targetPID to item 1 of argv",
+                "set queueName to item 2 of argv",
+                "set expectedCountText to item 3 of argv",
+                "set targetName to item 4 of argv",
+                "set targetArtist to item 5 of argv",
+                "set targetAlbum to item 6 of argv",
+                "set targetIndex to (item 7 of argv) as integer",
+                "tell application \"Music\"",
+            ] + magicianEnsureApplicationReadyAppleScriptLines(activate: false)
+                + [
+                "try",
+                "set fixed indexing to true",
+                "end try"
+                ]
+                + libraryOrderedPlaybackSetupAppleScriptLines()
+                + [
+                "if not (exists user playlist queueName) then",
+                "return \"queue_reuse_unavailable|reason=playlist_missing\"",
+                "end if",
+                "set queuePlaylist to user playlist queueName",
+                "set queueTracks to tracks of queuePlaylist",
+                "set queueCount to count of queueTracks",
+                "if (expectedCountText as integer) is not queueCount then",
+                "return \"queue_reuse_unavailable|reason=count_mismatch|queue_count=\" & queueCount",
+                "end if",
+                "set queueTrack to missing value",
+                "repeat with candidateTrack in queueTracks",
+                "try",
+                "if ((persistent ID of candidateTrack) as string) is targetPID then",
+                "set queueTrack to candidateTrack",
+                "exit repeat",
+                "end if",
+                "end try",
+                "end repeat",
+                "if queueTrack is missing value then",
+                "return \"queue_reuse_unavailable|reason=target_missing|queue_count=\" & queueCount",
+                "end if",
+                "set finalState to \"unknown\"",
+                "set lastNowName to \"\"",
+                "set lastNowArtist to \"\"",
+                "set lastNowAlbum to \"\"",
+                "set lastNowID to \"\"",
+                "set lastMetadataMatch to false",
+                "play queueTrack",
+                "repeat with attemptIndex from 1 to 6",
+                "delay 0.25",
+                "set finalState to (player state as string)",
+                "try",
+                "set nowTrack to current track",
+                "set lastNowName to (name of nowTrack) as string",
+                "set lastNowArtist to (artist of nowTrack) as string",
+                "set lastNowAlbum to (album of nowTrack) as string",
+                "set lastNowID to (persistent ID of nowTrack) as string",
+                "set lastMetadataMatch to ((lastNowName is targetName) and (lastNowArtist is targetArtist))",
+                "if lastNowID is targetPID then",
+                "return \"track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|queue_mode=library_order|queue_lock=playlist_rotation|queue_playlist=\" & queueName & \"|queue_count=\" & queueCount & \"|target_index=\" & targetIndex & \"|target_id=\" & targetPID & \"|resolved_id=\" & lastNowID & \"|target_id_match=true|metadata_match=true|queue_reused=true\"",
+                "end if",
+                "if lastMetadataMatch then",
+                "return \"track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|queue_mode=library_order|queue_lock=playlist_rotation|queue_playlist=\" & queueName & \"|queue_count=\" & queueCount & \"|target_index=\" & targetIndex & \"|target_id=\" & targetPID & \"|resolved_id=\" & lastNowID & \"|target_id_match=false|metadata_match=true|resolved_id_substituted=true|queue_reused=true\"",
+                "end if",
+                "end try",
+                "end repeat",
+                "if lastNowName is not \"\" then",
+                "return \"track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|queue_mode=library_order|queue_lock=playlist_rotation|queue_playlist=\" & queueName & \"|queue_count=\" & queueCount & \"|target_index=\" & targetIndex & \"|target_id=\" & targetPID & \"|resolved_id=\" & lastNowID & \"|play_mismatch=true|target_id_match=false|metadata_match=\" & (lastMetadataMatch as string) & \"|queue_reused=true\"",
+                "end if",
+                "return \"queue_reuse_unavailable|reason=playback_unconfirmed|queue_count=\" & queueCount",
+                "end tell",
+                "end run"
+            ],
+            arguments: [
+                persistentID,
+                Self.lockedQueuePlaylistName,
+                String(snapshot.tracks.count),
+                targetTrack.name,
+                targetTrack.artist,
+                targetTrack.album,
+                String(targetIndex + 1)
+            ],
+            timeoutSeconds: 25
+        )
+
+        let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard output.contains("queue_reused=true") else {
+            return nil
+        }
+        return result
+    }
+
+    private static func evidenceResolvedTrackIDMatchesTarget(output: String, targetID: String) -> Bool {
+        if let explicitMatch = evidenceBooleanField("target_id_match", from: output) {
+            return explicitMatch
+        }
+        let normalizedTargetID = targetID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTargetID.isEmpty else {
+            return false
+        }
+        guard let resolvedID = evidenceField("resolved_id", from: output) else {
+            return true
+        }
+        return resolvedID.caseInsensitiveCompare(normalizedTargetID) == .orderedSame
+    }
+
+    static func verifyLibraryPlayback(
+        output: String,
+        targetID: String,
+        query: String,
+        playIntent: PlayIntent
+    ) -> LibraryPlaybackVerification {
+        let normalizedState = (evidenceField("state", from: output) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let playbackActive = normalizedState == "play" || normalizedState == "playing"
+        let queryMatches: Bool = {
+            if playIntent == .album {
+                return albumEvidenceMatchesQuery(output: output, query: query)
+            }
+            if Self.isMoodDiscoveryQuery(query) {
+                return true
+            }
+            return magicianMusicEvidenceMatchesQuery(output: output, query: query)
+        }()
+        return LibraryPlaybackVerification(
+            playbackActive: playbackActive,
+            queryMatches: queryMatches,
+            targetIDMatches: evidenceResolvedTrackIDMatchesTarget(output: output, targetID: targetID),
+            metadataMatches: evidenceBooleanField("metadata_match", from: output) ?? false
+        )
+    }
+
+    private static func resolveAcceptedPlaybackResult(
+        initialResult: MagicianProcessResult,
+        targetID: String,
+        query: String,
+        playIntent: PlayIntent
+    ) async -> MagicianProcessResult? {
+        let initialOutput = initialResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if initialResult.exitCode == 0, initialOutput.hasPrefix("track=") {
+            let verification = verifyLibraryPlayback(
+                output: initialOutput,
+                targetID: targetID,
+                query: query,
+                playIntent: playIntent
+            )
+            if verification.isAccepted {
+                return MagicianProcessResult(
+                    exitCode: initialResult.exitCode,
+                    stdout: initialOutput,
+                    stderr: initialResult.stderr
+                )
+            }
+        }
+
+        for attempt in 1...5 {
+            let probe = await probeCurrentPlayback(targetID: targetID)
+            let probeOutput = probe.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if probe.exitCode == 0, probeOutput.hasPrefix("track=") {
+                let verification = verifyLibraryPlayback(
+                    output: probeOutput,
+                    targetID: targetID,
+                    query: query,
+                    playIntent: playIntent
+                )
+                if verification.isAccepted {
+                    return MagicianProcessResult(
+                        exitCode: 0,
+                        stdout: probeOutput,
+                        stderr: initialResult.stderr.isEmpty ? probe.stderr : initialResult.stderr
+                    )
+                }
+            }
+            if attempt < 5 {
+                try? await Task.sleep(nanoseconds: 350_000_000)
+            }
+        }
+        return nil
+    }
+
+    private static func resolveAcceptedTargetIDPlaybackResult(
+        initialResult: MagicianProcessResult,
+        targetID: String
+    ) async -> MagicianProcessResult? {
+        let initialOutput = initialResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if
+            initialResult.exitCode == 0,
+            initialOutput.hasPrefix("track="),
+            evidenceResolvedTrackIDMatchesTarget(output: initialOutput, targetID: targetID)
+        {
+            return MagicianProcessResult(
+                exitCode: initialResult.exitCode,
+                stdout: initialOutput,
+                stderr: initialResult.stderr
+            )
+        }
+
+        for attempt in 1...5 {
+            let probe = await probeCurrentPlayback(targetID: targetID)
+            let probeOutput = probe.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if
+                probe.exitCode == 0,
+                probeOutput.hasPrefix("track="),
+                evidenceResolvedTrackIDMatchesTarget(output: probeOutput, targetID: targetID)
+            {
+                return MagicianProcessResult(
+                    exitCode: 0,
+                    stdout: probeOutput,
+                    stderr: initialResult.stderr.isEmpty ? probe.stderr : initialResult.stderr
+                )
+            }
+            if attempt < 5 {
+                try? await Task.sleep(nanoseconds: 350_000_000)
+            }
+        }
+        return nil
+    }
+
+    private static func probeCurrentPlayback(targetID: String) async -> MagicianProcessResult {
+        await runOsaScript(
+            lines: [
+                "on run argv",
+                "set targetPID to item 1 of argv",
+                "tell application \"Music\"",
+            ] + magicianEnsureApplicationReadyAppleScriptLines(activate: false) + [
+                "set targetTrack to missing value",
+                "try",
+                "set allTracks to tracks of library playlist 1",
+                "repeat with t in allTracks",
+                "try",
+                "if ((persistent ID of t) as string) is targetPID then",
+                "set targetTrack to t",
+                "exit repeat",
+                "end if",
+                "end try",
+                "end repeat",
+                "end try",
+                "set finalState to (player state as string)",
+                "try",
+                "set nowTrack to current track",
+                "set nowName to (name of nowTrack) as string",
+                "set nowArtist to (artist of nowTrack) as string",
+                "set nowAlbum to (album of nowTrack) as string",
+                "set nowID to (persistent ID of nowTrack) as string",
+                "set metadataMatch to false",
+                "if targetTrack is not missing value then",
+                "set targetName to (name of targetTrack) as string",
+                "set targetArtist to (artist of targetTrack) as string",
+                "set metadataMatch to ((nowName is targetName) and (nowArtist is targetArtist))",
+                "end if",
+                "if nowID is targetPID then",
+                "return \"track=\" & nowName & \"|artist=\" & nowArtist & \"|album=\" & nowAlbum & \"|state=\" & finalState & \"|target_id=\" & targetPID & \"|resolved_id=\" & nowID & \"|target_id_match=true|metadata_match=true|verification_probe=true\"",
+                "end if",
+                "return \"track=\" & nowName & \"|artist=\" & nowArtist & \"|album=\" & nowAlbum & \"|state=\" & finalState & \"|target_id=\" & targetPID & \"|resolved_id=\" & nowID & \"|target_id_match=false|metadata_match=\" & (metadataMatch as string) & \"|verification_probe=true\"",
+                "on error errMsg",
+                "return \"state=\" & finalState & \"|target_id=\" & targetPID & \"|verification_probe=true|probe_error=\" & errMsg",
+                "end try",
+                "end tell",
+                "end run"
+            ],
+            arguments: [targetID],
+            timeoutSeconds: 10
+        )
+    }
+
+    private static func runFallbackLibraryOrderedPlay() async -> MagicianProcessResult? {
+        guard let snapshot = await loadLibraryCatalogSnapshot(), let firstTrack = snapshot.tracks.first else {
+            return nil
+        }
+        let playResult = await playTrackByPersistentID(firstTrack.persistentID, snapshot: snapshot)
+        guard let verifiedResult = await resolveAcceptedPlaybackResult(
+            initialResult: playResult,
+            targetID: firstTrack.persistentID,
+            query: firstTrack.name,
+            playIntent: .song
+        ) else {
+            return nil
+        }
+        if let rotatedTracks = rotatedLibraryTracks(
+            startingAtPersistentID: firstTrack.persistentID,
+            tracks: snapshot.tracks
+        ) {
+            await libraryOrderSessionCoordinator.replaceSession(
+                orderedTrackIDs: rotatedTracks.map(\.persistentID),
+                revision: snapshot.revision
+            )
+        }
+        return MagicianProcessResult(
+            exitCode: 0,
+            stdout: verifiedResult.stdout + "|strategy=library_order_fallback|index_revision=\(snapshot.revision)",
+            stderr: verifiedResult.stderr
+        )
+    }
+
+    private static func libraryOrderedPlaybackSetupAppleScriptLines(anchorToLibraryQueue: Bool = false) -> [String] {
+        var lines = [
+            "try",
+            "set shuffle enabled to false",
+            "end try",
+            "try",
+            "set song repeat to off",
+            "end try"
+        ]
+        if anchorToLibraryQueue {
+            lines += [
+                "try",
+                "play library playlist 1",
+                "delay 0.08",
+                "end try"
+            ]
+        }
+        return lines
+    }
+
+    private static func runLockedLibraryOrderLoop(orderedTrackIDs: [String]) async {
+        guard orderedTrackIDs.count >= 2 else {
+            return
+        }
+
+        var pendingTransition: (fromID: String, toID: String)?
+        while !Task.isCancelled {
+            guard let snapshot = await currentPlaybackSnapshot() else {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                continue
+            }
+
+            let normalizedState = snapshot.state
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let isPlaybackActive = normalizedState == "play" || normalizedState == "playing"
+
+            if let activeTransition = pendingTransition {
+                if snapshot.persistentID.caseInsensitiveCompare(activeTransition.toID) == .orderedSame {
+                    pendingTransition = nil
+                } else if snapshot.persistentID.caseInsensitiveCompare(activeTransition.fromID) == .orderedSame {
+                    if snapshot.position < 1.0 {
+                        let playResult = await playTrackByPersistentID(activeTransition.toID)
+                        if await resolveAcceptedTargetIDPlaybackResult(
+                            initialResult: playResult,
+                            targetID: activeTransition.toID
+                        ) != nil {
+                            pendingTransition = nil
+                        }
+                    }
+                } else if snapshot.position < 2.0 {
+                    let playResult = await playTrackByPersistentID(activeTransition.toID)
+                    if await resolveAcceptedTargetIDPlaybackResult(
+                        initialResult: playResult,
+                        targetID: activeTransition.toID
+                    ) != nil {
+                        pendingTransition = nil
+                    }
+                }
+            } else if
+                isPlaybackActive,
+                let currentIndex = orderedTrackIDs.firstIndex(where: {
+                    $0.caseInsensitiveCompare(snapshot.persistentID) == .orderedSame
+                }),
+                currentIndex < orderedTrackIDs.count - 1,
+                max(snapshot.duration - snapshot.position, 0) <= 0.9
+            {
+                pendingTransition = (
+                    fromID: orderedTrackIDs[currentIndex],
+                    toID: orderedTrackIDs[currentIndex + 1]
+                )
+            } else if
+                !orderedTrackIDs.contains(where: {
+                    $0.caseInsensitiveCompare(snapshot.persistentID) == .orderedSame
+                })
+            {
+                break
+            }
+
+            let sleepNanoseconds: UInt64 = pendingTransition == nil ? 1_200_000_000 : 250_000_000
+            try? await Task.sleep(nanoseconds: sleepNanoseconds)
+        }
+    }
+
+    private static func currentTrackPersistentID() async -> String? {
+        await currentPlaybackSnapshot()?.persistentID
+    }
+
+    private static func currentPlaybackSnapshot() async -> PlaybackSnapshot? {
+        let probe = await runOsaScript(
+            lines: [
+                "tell application \"Music\"",
+            ] + magicianEnsureApplicationReadyAppleScriptLines(activate: false) + [
+                "set finalState to (player state as string)",
+                "try",
+                "set nowTrack to current track",
+                "return \"state=\" & finalState & \"|resolved_id=\" & ((persistent ID of nowTrack) as string) & \"|track=\" & (name of nowTrack as string) & \"|artist=\" & (artist of nowTrack as string) & \"|position=\" & (player position as string) & \"|duration=\" & ((duration of nowTrack) as string)",
+                "on error errMsg",
+                "return \"state=\" & finalState & \"|probe_error=\" & errMsg",
+                "end try",
+                "end tell"
+            ],
+            arguments: [],
+            timeoutSeconds: 8
+        )
+        guard probe.exitCode == 0 else {
+            return nil
+        }
+        guard
+            let persistentID = evidenceField("resolved_id", from: probe.stdout),
+            let track = evidenceField("track", from: probe.stdout),
+            let artist = evidenceField("artist", from: probe.stdout)
+        else {
+            return nil
+        }
+        let state = evidenceField("state", from: probe.stdout) ?? ""
+        let position = Double(evidenceField("position", from: probe.stdout) ?? "") ?? 0
+        let duration = Double(evidenceField("duration", from: probe.stdout) ?? "") ?? 0
+        return PlaybackSnapshot(
+            persistentID: persistentID,
+            track: track,
+            artist: artist,
+            state: state,
+            position: position,
+            duration: duration
+        )
+    }
+
+    private static func annotatedTransitionPlaybackOutput(
+        _ output: String,
+        transitionState: String
+    ) -> String {
+        let parts = output.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        var rewritten: [String] = []
+        var playbackState: String?
+        var hasPlaybackState = false
+
+        for part in parts {
+            if part.hasPrefix("state=") {
+                let candidate = String(part.dropFirst("state=".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !candidate.isEmpty {
+                    playbackState = candidate
+                }
+                continue
+            }
+            if part.hasPrefix("playback_state=") {
+                hasPlaybackState = true
+            }
+            rewritten.append(part)
+        }
+
+        rewritten.append("state=\(transitionState)")
+        if !hasPlaybackState, let playbackState, !playbackState.isEmpty {
+            rewritten.append("playback_state=\(playbackState)")
+        }
+        return rewritten.joined(separator: "|")
+    }
+
+    private static func parseEvidence(_ output: String) -> (state: String?, track: String?, artist: String?) {
+        var state: String?
+        var track: String?
+        var artist: String?
+        let parts = output.split(separator: "|").map(String.init)
+        for part in parts {
+            if part.hasPrefix("state=") {
+                state = String(part.dropFirst("state=".count))
+            } else if part.hasPrefix("track=") {
+                track = String(part.dropFirst("track=".count))
+            } else if part.hasPrefix("artist=") {
+                artist = String(part.dropFirst("artist=".count))
+            }
+        }
+        return (state, track, artist)
+    }
+
+    private static func evidenceField(_ key: String, from output: String) -> String? {
+        let prefix = "\(key)="
+        let parts = output.split(separator: "|", omittingEmptySubsequences: false)
+        for part in parts {
+            let piece = String(part)
+            if piece.hasPrefix(prefix) {
+                let value = String(piece.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    return value
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func evidenceBooleanField(_ key: String, from output: String) -> Bool? {
+        guard let rawValue = evidenceField(key, from: output)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        else {
+            return nil
+        }
+        switch rawValue {
+        case "true", "yes", "1":
+            return true
+        case "false", "no", "0":
+            return false
+        default:
+            return nil
+        }
+    }
+
+    static func normalizedPlaybackEvidenceForMismatch(
+        rawOutput: String,
+        query: String,
+        action: Action
+    ) -> String {
+        func normalizedNonEmpty(_ value: String?) -> String? {
+            guard let value else {
+                return nil
+            }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+
+        var output = rawOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsed = parseEvidence(output)
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "|", with: " ")
+        let fallbackState = normalizedNonEmpty(parsed.state)
+            ?? action.rawValue
+        let fallbackTrack = normalizedNonEmpty(parsed.track)
+            ?? normalizedNonEmpty(normalizedQuery)
+        let fallbackArtist = normalizedNonEmpty(parsed.artist)
+
+        func hasKey(_ key: String) -> Bool {
+            output.lowercased().contains("\(key.lowercased())=")
+        }
+
+        func appendField(_ key: String, _ value: String?) {
+            guard let value, !value.isEmpty, !hasKey(key) else {
+                return
+            }
+            if output.isEmpty {
+                output = "\(key)=\(value)"
+            } else {
+                output += "|\(key)=\(value)"
+            }
+        }
+
+        appendField("state", fallbackState)
+        appendField("track", fallbackTrack)
+        appendField("artist", fallbackArtist)
+        appendField("query", normalizedNonEmpty(normalizedQuery))
+        appendField("evidence_confidence", "low")
+        appendField("query_mismatch", "true")
+
+        if output.isEmpty {
+            output = "state=\(fallbackState)|query=\(normalizedQuery)|evidence_confidence=low|query_mismatch=true"
+        }
+        return output
+    }
+
+    private static func albumEvidenceMatchesQuery(output: String, query: String) -> Bool {
+        let parts = output.split(separator: "|").map(String.init)
+        let albumValue = parts.first(where: { $0.hasPrefix("album=") })
+            .map { String($0.dropFirst("album=".count)) } ?? ""
+        let normalizedAlbum = normalizedMusicMatchText(albumValue)
+        guard !normalizedAlbum.isEmpty else {
+            return false
+        }
+        let queries = magicianMusicSearchQueries(from: query)
+            .map(normalizedMusicMatchText)
+            .filter { !$0.isEmpty }
+        for q in queries {
+            if normalizedAlbum == q || normalizedAlbum.contains(q) || q.contains(normalizedAlbum) {
+                return true
+            }
+            let parts = queryParts(from: q)
+            if !parts.isEmpty, parts.allSatisfy({ normalizedAlbum.contains($0) }) {
+                return true
+            }
+        }
+        return false
+    }
+}

@@ -1,0 +1,16 @@
+.DS_Store
+DerivedData/
+build/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.swiftpm/
+
+tokscale-report-*/
+
+.codex/
+Config/LocalSecrets.xcconfig
+
+# 本地产品草案，不进仓库
+/魔法师-产品需求文档.md
+/魔法师-软件工程文档.md

@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/runtime-policy.sh"
+runtime_policy_init
+
+PROJECT_PATH="$ROOT_DIR/PulseType.xcodeproj"
+SCHEME="PulseType"
+CONFIGURATION="${CONFIGURATION:-Debug}"
+DEST_APP="$PULSETYPE_INSTALL_PATH"
+APP_ID="$PULSETYPE_APP_ID"
+DEVELOPER_DIR_VALUE="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+
+if [[ ! -d "$DEVELOPER_DIR_VALUE" ]]; then
+  echo "未找到 Xcode Developer 目录：$DEVELOPER_DIR_VALUE"
+  echo "请先安装 Xcode，或设置 DEVELOPER_DIR。"
+  exit 2
+fi
+
+if [[ ! -f "$PROJECT_PATH/project.pbxproj" ]]; then
+  echo "未找到项目文件：$PROJECT_PATH"
+  exit 2
+fi
+
+if ! command -v xcodebuild >/dev/null 2>&1; then
+  echo "未找到 xcodebuild，请先安装 Xcode。"
+  exit 2
+fi
+
+if ! command -v rsync >/dev/null 2>&1; then
+  echo "未找到 rsync，请先安装命令行工具。"
+  exit 2
+fi
+
+echo "开始构建 ${SCHEME}（${CONFIGURATION}）..."
+DEVELOPER_DIR="$DEVELOPER_DIR_VALUE" \
+  xcodebuild \
+  -project "$PROJECT_PATH" \
+  -scheme "$SCHEME" \
+  -configuration "$CONFIGURATION" \
+  -destination "platform=macOS" \
+  build >/dev/null
+
+echo "读取构建产物路径..."
+BUILD_SETTINGS="$(
+  DEVELOPER_DIR="$DEVELOPER_DIR_VALUE" \
+    xcodebuild \
+    -project "$PROJECT_PATH" \
+    -scheme "$SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -showBuildSettings
+)"
+
+TARGET_BUILD_DIR="$(printf "%s\n" "$BUILD_SETTINGS" | awk -F' = ' '/ TARGET_BUILD_DIR = / { print $2; exit }')"
+FULL_PRODUCT_NAME="$(printf "%s\n" "$BUILD_SETTINGS" | awk -F' = ' '/ FULL_PRODUCT_NAME = / { print $2; exit }')"
+
+if [[ -z "${TARGET_BUILD_DIR:-}" || -z "${FULL_PRODUCT_NAME:-}" ]]; then
+  echo "无法解析构建输出路径。"
+  exit 3
+fi
+
+SOURCE_APP="$TARGET_BUILD_DIR/$FULL_PRODUCT_NAME"
+if [[ ! -d "$SOURCE_APP" ]]; then
+  echo "构建完成但未找到产物：$SOURCE_APP"
+  exit 3
+fi
+
+echo "准备覆盖安装到 $DEST_APP ..."
+osascript -e 'try' -e "tell application id \"$APP_ID\" to quit" -e 'end try' >/dev/null 2>&1 || true
+pkill -f "/$(basename "$DEST_APP")/Contents/MacOS/$(basename "$DEST_APP" .app)" >/dev/null 2>&1 || true
+
+if [[ -d "$DEST_APP" ]]; then
+  rm -rf "$DEST_APP" || {
+    echo "删除旧版本失败，可能需要管理员权限。"
+    echo "请执行：sudo rm -rf \"$DEST_APP\""
+    exit 4
+  }
+fi
+
+rsync -a --delete "$SOURCE_APP/" "$DEST_APP/"
+
+echo "应用重签名（稳定权限标识）..."
+codesign \
+  --force \
+  --deep \
+  --sign - \
+  --identifier "$APP_ID" \
+  --requirements "=designated => identifier \"$APP_ID\"" \
+  "$DEST_APP"
+
+LSREGISTER="$PULSETYPE_LSREGISTER_PATH"
+if [[ -x "$LSREGISTER" ]]; then
+  "$LSREGISTER" -u "$SOURCE_APP" >/dev/null 2>&1 || true
+  for stale in "$ROOT_DIR/build/Debug/PulseType.app" "$ROOT_DIR/build/Release/PulseType.app"; do
+    if [[ -e "$stale" ]]; then
+      "$LSREGISTER" -u "$stale" >/dev/null 2>&1 || true
+      rm -rf "$stale" || true
+    fi
+  done
+  "$LSREGISTER" -f -R "$DEST_APP" >/dev/null 2>&1 || true
+  while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+    if [[ "$path" != "$DEST_APP" ]]; then
+      "$LSREGISTER" -u "$path" >/dev/null 2>&1 || true
+    fi
+  done < <(mdfind "kMDItemCFBundleIdentifier == '$APP_ID'" 2>/dev/null || true)
+  "$LSREGISTER" -gc >/dev/null 2>&1 || true
+fi
+
+if [[ "$SOURCE_APP" != "$DEST_APP" && -d "$SOURCE_APP" ]]; then
+  rm -rf "$SOURCE_APP" || true
+fi
+
+while IFS= read -r path; do
+  [[ -z "$path" || "$path" == "$DEST_APP" ]] && continue
+  case "$path" in
+    "$HOME"/Library/Developer/Xcode/DerivedData/*/Build/Products/*/PulseType.app)
+      rm -rf "$path" || true
+      ;;
+  esac
+done < <(mdfind "kMDItemCFBundleIdentifier == '$APP_ID'" 2>/dev/null || true)
+
+echo
+echo "已安装：$DEST_APP"
+codesign -dv --verbose=2 "$DEST_APP" 2>&1 | awk '/Identifier=|Signature=|TeamIdentifier=|CDHash=/{print}'
+codesign -d -r- "$DEST_APP" 2>&1 | awk '/designated/{print}'
+echo
+echo "现在将从 /Applications 启动..."
+open "$DEST_APP"
+echo "完成。"
