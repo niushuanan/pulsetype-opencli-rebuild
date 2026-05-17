@@ -461,6 +461,42 @@ final class InteractionCoordinator {
         let focusContext = contextDetector.focusedAppContext()
         let commandText = transcription.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        guard AgentCapabilitySettings.isMusicControlEnabled() else {
+            let message = "音乐控制已关闭，请先到 Agent 页面打开后再试。"
+            localHistoryStore.append(
+                SessionHistoryEntry(
+                    mode: .agent,
+                    appName: focusContext.appName,
+                    bundleID: focusContext.bundleID,
+                    inputText: transcription.transcript,
+                    outputText: nil,
+                    transcriptionProvider: transcription.providerName,
+                    transcriptionModel: transcription.modelName,
+                    textProcessingProvider: providerSettingsStore.textProcessingConfiguration.providerName,
+                    textProcessingModel: providerSettingsStore.textProcessingConfiguration.modelName,
+                    agentEvidenceSummary: "apple.music.control|fast_path=true|error=capability_disabled|capability=music",
+                    status: .failed,
+                    errorMessage: message,
+                    audioDurationSeconds: audioDurationSeconds
+                )
+            )
+            speechPipelineLogger.log(
+                traceID: traceID,
+                lane: .agentMusic,
+                provider: transcription.providerName,
+                model: transcription.modelName,
+                httpStatus: nil,
+                stage: "agent.music.failed",
+                errorType: "capabilityDisabled",
+                detail: message,
+                audioDuration: audioDurationSeconds,
+                transcriptLength: transcription.transcript.count
+            )
+            sessionStore.fail(message: message)
+            currentTraceID = nil
+            return
+        }
+
         guard !commandText.isEmpty else {
             let message = "没有识别到可执行的音乐指令。"
             localHistoryStore.append(

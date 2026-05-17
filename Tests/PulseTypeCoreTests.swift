@@ -47,6 +47,15 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertNil(store.conflictMessage)
     }
 
+    func testAgentMusicCapabilityDefaultsToEnabledAndCanBeTurnedOff() {
+        let defaults = makeDefaults()
+
+        XCTAssertTrue(AgentCapabilitySettings.isMusicControlEnabled(defaults: defaults))
+
+        defaults.set(false, forKey: AgentCapabilitySettings.musicControlEnabledKey)
+        XCTAssertFalse(AgentCapabilitySettings.isMusicControlEnabled(defaults: defaults))
+    }
+
     func testHistoryStoreKeepsSupportedModesFromOldFiles() throws {
         let directory = makeTemporaryDirectory()
         let file = directory.appendingPathComponent("session-history-v2.json")

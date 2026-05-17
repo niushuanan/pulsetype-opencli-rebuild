@@ -1,6 +1,17 @@
 import AppKit
 import Foundation
 
+enum AgentCapabilitySettings {
+    static let musicControlEnabledKey = "agent.capability.music.enabled.v1"
+
+    static func isMusicControlEnabled(defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: musicControlEnabledKey) != nil else {
+            return true
+        }
+        return defaults.bool(forKey: musicControlEnabledKey)
+    }
+}
+
 struct WakeInvocationContext: Equatable {
     enum Source: String, Equatable {
         case dictationTap

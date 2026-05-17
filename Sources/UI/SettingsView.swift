@@ -10,6 +10,7 @@ struct SettingsView: View {
     @ObservedObject private var providerSettingsStore: ProviderSettingsStore
     @ObservedObject private var localHistoryStore: LocalHistoryStore
     @ObservedObject private var toastPresenter: ToastPresenter
+    @AppStorage(AgentCapabilitySettings.musicControlEnabledKey) private var isAgentMusicControlEnabled = true
 
     @State private var asrTesting = false
     @State private var textTesting = false
@@ -182,17 +183,36 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 pageTitleText(
                     "Agent",
-                    subtitle: "长按快捷键，一句话下指令。现在默认控制音乐，后续会逐步扩展更多能力。"
+                    subtitle: "长按快捷键触发。下面可以直接开关每个 Agent 功能。"
                 )
-                agentEntryCard
-                agentCurrentCapabilityCard
-                agentRecentRunsCard
-                agentRoadmapCard
+                agentCapabilityCard
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, PulseUI.Spacing.pageHorizontal)
             .padding(.vertical, PulseUI.Spacing.pageVertical)
         }
+    }
+
+    private var agentCapabilityCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("音乐控制")
+                        .font(PulseUI.Typography.bodyStrong)
+                    Text("播放、暂停、继续、上一首、下一首")
+                        .font(PulseUI.Typography.caption)
+                        .pulseSecondaryText()
+                }
+                Spacer()
+                Toggle("音乐控制", isOn: $isAgentMusicControlEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .accessibilityLabel("音乐控制")
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+        }
+        .controlCenterSectionGroup()
     }
 
     private var settingsPage: some View {

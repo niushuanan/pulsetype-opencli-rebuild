@@ -33,6 +33,26 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 02:12 - Agent 页改成极简开关，并把开关接入真实执行门禁
+
+- 本次任务：把 Agent 页面收敛成“标题说明 + 功能开关列表”，并确保开关不是纯展示，而是真正控制 Agent 音乐执行。
+- 改了哪些文件：
+  - `Sources/UI/SettingsView.swift`
+  - `Sources/Core/Interaction/InteractionCoordinator.swift`
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - Agent 页移除原来的多卡片信息区，只保留一行“音乐控制”能力项，右侧使用 macOS 原生胶囊 `Toggle(.switch)`。
+  - 新增 `AgentCapabilitySettings`（放在 `InteractionCoordinatorTypes.swift`）统一管理能力开关 key 与默认值策略（未设置时默认开启）。
+  - 在 `executeAgentMusicCommand(...)` 入口增加能力门禁：当音乐控制关闭时，直接失败返回，并写入 Agent 历史与执行日志，避免“UI 关了但底层还在跑”。
+  - 增加单测 `testAgentMusicCapabilityDefaultsToEnabledAndCanBeTurnedOff`，覆盖默认开启与关闭持久化场景。
+- 为什么这样改：
+  - 用户要的是干净、可读、接近系统设置风格的页面，而不是技术说明页。
+  - 开关必须控制真实行为，否则会形成“看起来可控，实际上不可控”的体验落差。
+- 影响了哪些模块：
+  - Agent 页面 UI 信息架构、能力开关持久化、Agent 音乐执行入口、历史失败可观测性、核心测试集合。
+
 ### 2026-05-18 02:01 - 控制中心新增独立 Agent 页面（位于设置上方）
 
 - 本次任务：在左侧列表中新增 `Agent` 入口，并提供一个面向用户的独立页面，为后续多能力扩展预留结构。
