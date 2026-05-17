@@ -50,6 +50,7 @@ final class AppModel: ObservableObject {
     let localStore: LocalStore
     let localHistoryStore: LocalHistoryStore
     let diagnosticsCenter: DiagnosticsCenter
+    let statusPulseHUDController: StatusPulseHUDController
     let toastPresenter: ToastPresenter
 
     private let runtimePolicy = AppRuntimePolicy.current()
@@ -71,6 +72,7 @@ final class AppModel: ObservableObject {
         localStore: LocalStore,
         localHistoryStore: LocalHistoryStore,
         diagnosticsCenter: DiagnosticsCenter,
+        statusPulseHUDController: StatusPulseHUDController,
         toastPresenter: ToastPresenter
     ) {
         self.controlCenterState = controlCenterState
@@ -87,6 +89,7 @@ final class AppModel: ObservableObject {
         self.localStore = localStore
         self.localHistoryStore = localHistoryStore
         self.diagnosticsCenter = diagnosticsCenter
+        self.statusPulseHUDController = statusPulseHUDController
         self.toastPresenter = toastPresenter
 
         migrateLegacyLocalState()
@@ -94,6 +97,7 @@ final class AppModel: ObservableObject {
         if !Self.isRunningUnderTests() {
             permissionsCenter.autoRequestOnLaunchIfNeeded()
         }
+        bindStatusPulse()
         bindGlobalHotkeyRuntimeState()
         bindAppLifecycle()
         activateGlobalHotkeys()
@@ -158,6 +162,7 @@ final class AppModel: ObservableObject {
             localStore: store,
             localHistoryStore: localHistoryStore,
             diagnosticsCenter: DiagnosticsCenter(),
+            statusPulseHUDController: StatusPulseHUDController(),
             toastPresenter: toastPresenter
         )
     }
@@ -181,6 +186,39 @@ final class AppModel: ObservableObject {
 
     func registerControlCenterWindowOpener(_ opener: @escaping () -> Void) {
         controlCenterWindowOpener = opener
+    }
+
+    private func bindStatusPulse() {
+        sessionStore.$phase
+            .combineLatest(
+                sessionStore.$activeLane,
+                sessionStore.$statusMessage,
+                sessionStore.$hudProgressHint
+            )
+            .combineLatest(sessionStore.$listeningLevel)
+            .map { payload -> StatusPulsePayload in
+                let (state, listeningLevel) = payload
+                let (phase, lane, message, progressHint) = state
+                return StatusPulsePayload(
+                    phase: phase,
+                    lane: lane,
+                    message: message,
+                    progressHint: progressHint,
+                    listeningLevel: max(0, min(1, listeningLevel))
+                )
+            }
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] payload in
+                self?.statusPulseHUDController.show(
+                    phase: payload.phase,
+                    lane: payload.lane,
+                    message: payload.message,
+                    progressHint: payload.progressHint,
+                    listeningLevel: payload.listeningLevel
+                )
+            }
+            .store(in: &cancellables)
     }
 
     private func activateGlobalHotkeys() {
@@ -299,4 +337,12 @@ final class AppModel: ObservableObject {
             try? FileManager.default.removeItem(at: child)
         }
     }
+}
+
+private struct StatusPulsePayload: Equatable {
+    let phase: SessionPhase
+    let lane: InputLane
+    let message: String
+    let progressHint: Double
+    let listeningLevel: Double
 }

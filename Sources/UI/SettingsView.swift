@@ -80,7 +80,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 pageTitleText(
                     "语音输入概览",
-                    subtitle: "按 \(hotkeyStateStore.wakeShortcutText) 开始或停止，ASR 识别后由文字模型整理并写入当前应用。"
+                    subtitle: homeInstructionText
                 )
                 metricsGrid
             }
@@ -203,7 +203,7 @@ struct SettingsView: View {
 
     private var hotkeySection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("快捷键", subtitle: "只保留开始/停止听写和取消会话。")
+            sectionHeader("快捷键", subtitle: hotkeySectionSubtitle)
 
             Picker("开始方式", selection: wakeTriggerModeBinding) {
                 ForEach(HotkeyTriggerMode.allCases) { mode in
@@ -245,6 +245,24 @@ struct SettingsView: View {
         }
         .padding(16)
         .controlCenterSectionGroup()
+    }
+
+    private var homeInstructionText: String {
+        switch hotkeyStateStore.wakeTriggerMode {
+        case .modifierTap:
+            return "轻点 \(hotkeyStateStore.wakeModifier.displayName) 开始或停止；按住说话，松开后会自动结束并继续处理。"
+        case .shortcut:
+            return "按 \(hotkeyStateStore.wakeShortcutText) 开始或停止，ASR 识别后由文字模型整理并写入当前应用。"
+        }
+    }
+
+    private var hotkeySectionSubtitle: String {
+        switch hotkeyStateStore.wakeTriggerMode {
+        case .modifierTap:
+            return "轻点开始或停止；按住说话，松开后自动结束。取消仍然是 Esc。"
+        case .shortcut:
+            return "只保留开始/停止听写和取消会话。"
+        }
     }
 
     private var providerSection: some View {

@@ -113,7 +113,7 @@ final class InteractionCoordinator {
     }
 
     func handleCancelInput() {
-        guard sessionStore.phase != .idle else {
+        guard isCancellablePhase(sessionStore.phase) else {
             return
         }
 
@@ -199,6 +199,15 @@ final class InteractionCoordinator {
                 detail: error.localizedDescription
             )
             currentTraceID = nil
+        }
+    }
+
+    private func isCancellablePhase(_ phase: SessionPhase) -> Bool {
+        switch phase {
+        case .listening, .transcribing, .textProcessing, .inserting:
+            return true
+        case .idle, .cancelled, .error:
+            return false
         }
     }
 

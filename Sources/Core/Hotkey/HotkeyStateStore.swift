@@ -250,7 +250,7 @@ final class HotkeyStateStore: ObservableObject {
     private func resolvedWakeShortcutText() -> String {
         switch wakeTriggerMode {
         case .modifierTap:
-            return "单击 \(wakeModifier.displayName)"
+            return wakeModifier.displayName
         case .shortcut:
             return KeyboardShortcuts.getShortcut(for: .wakeSession)?.description ?? "未设置"
         }

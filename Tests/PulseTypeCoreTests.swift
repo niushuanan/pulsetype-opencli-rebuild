@@ -201,6 +201,37 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(sessionStore.phase, .idle)
     }
 
+    func testCancelIgnoredAfterSessionAlreadyCancelled() {
+        let directory = makeTemporaryDirectory()
+        let sessionStore = SessionStore()
+        let historyStore = LocalHistoryStore(historyDirectory: directory.appendingPathComponent("History"))
+        let coordinator = InteractionCoordinator(
+            sessionStore: sessionStore,
+            permissionsCenter: PermissionsCenter(
+                microphoneStateResolver: { .granted },
+                accessibilityStateResolver: { .granted }
+            ),
+            audioCaptureService: FakeAudioCaptureService(directory: directory),
+            providerSettingsStore: ProviderSettingsStore(
+                defaults: makeDefaults(),
+                credentialStore: MemoryCredentialStore()
+            ),
+            providerRegistry: SpeechProviderRegistry(providers: [FakeTranscriptionProvider()]),
+            textOutputCoordinator: FakeTextOutputCoordinator(),
+            contextDetector: FixedContextDetector(),
+            localHistoryStore: historyStore,
+            speechPipelineLogger: SpeechPipelineLogger(diagnosticsDirectory: directory.appendingPathComponent("Diagnostics")),
+            dictationPostProcessor: FakeDictationPostProcessor(output: "整理后文本")
+        )
+
+        sessionStore.startDictation()
+        coordinator.handleCancelInput()
+        XCTAssertEqual(historyStore.entries.count, 1)
+
+        coordinator.handleCancelInput()
+        XCTAssertEqual(historyStore.entries.count, 1)
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suiteName = "PulseTypeTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

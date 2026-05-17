@@ -16,8 +16,8 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/Core/History/`：普通听写历史与统计。
 - `Sources/Core/TextOutput/`：把最终文本写入目标应用。
 - `Sources/Core/Permissions/`：麦克风和辅助功能权限。
-- `Sources/Core/Hotkey/`：开始听写与取消会话快捷键。
-- `Sources/UI/`：控制中心、历史页、设置页、菜单栏状态。
+- `Sources/Core/Hotkey/`：开始听写与取消会话快捷键，以及单键轻点/长按的状态机。
+- `Sources/UI/`：控制中心、历史页、设置页、菜单栏状态、底部语音小条 HUD。
 - `Tests/`：普通听写主链的单元测试与链路测试。
 - `scripts/`：本地安装、诊断、发布脚本。
 
@@ -26,11 +26,21 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/App/PulseTypeApp.swift`：应用主入口。
 - `Sources/App/AppModel.swift`：运行时依赖装配入口。
 - `Sources/Core/Interaction/InteractionCoordinator.swift`：普通听写主链入口。
+- `Sources/Core/Hotkey/GlobalHotkeyService.swift`：全局快捷键、单键长按与取消逻辑入口。
 - `Sources/Core/Speech/ProviderSettingsStore.swift`：ASR 与文字处理模型配置入口。
 - `Sources/Core/TextProcessing/DictationPostProcessor.swift`：文字整理 prompt 与结果处理入口。
 - `Sources/UI/SettingsView.swift`：控制中心页面入口。
+- `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-17 20:06 - 普通听写热键主链与语音小条完整修复
+
+- 本次任务：把普通听写保留链路里退化掉的长按热键、语音小条和取消逻辑一次补齐。
+- 改了哪些文件：`Sources/Core/Hotkey/GlobalHotkeyService.swift`，`Sources/Core/Hotkey/HotkeyStateStore.swift`，`Sources/Core/Interaction/InteractionCoordinator.swift`，`Sources/App/AppModel.swift`，`Sources/UI/StatusPulseHUDController.swift`，`Sources/UI/SettingsView.swift`，`Sources/UI/MenuBarMenuView.swift`，`Tests/GlobalHotkeyStateMachineTests.swift`，`Tests/HUDProgressStateMachineTests.swift`，`Tests/PulseTypeCoreTests.swift`，`PulseType.xcodeproj/project.pbxproj`
+- 改了什么：恢复单键轻点与长按并存的热键语义，长按开始录音、松开自动结束；补回底部浮层语音小条，重新显示音量条、处理中进度、完成态、取消态和失败态；补上 `flagsChanged` 丢失左右修饰键 keyCode 时的回退逻辑；把 `Esc` 的取消范围限制在真正可取消的阶段，避免重复写入“已取消”历史；首页和设置页文案同步改成符合真实交互；新增热键状态机与 HUD 状态机测试。
+- 为什么这样改：当前精简版虽然保住了 ASR 到文字处理主链，但把最核心的交互体验删坏了，导致按住说话、松手停止、底部语音小条这些普通听写主能力都不再成立，同时取消逻辑还会污染历史记录。
+- 影响了哪些模块：全局热键、会话取消规则、AppModel 运行时绑定、浮层 HUD、首页与设置页文案、菜单栏交互、单元测试与工程文件。
+
 ### 2026-05-17 19:40 - 历史页与设置页进一步精简
 
 - 本次任务：继续清理历史页和设置页，只保留普通听写需要的配置与说明。

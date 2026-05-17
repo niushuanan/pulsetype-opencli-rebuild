@@ -55,7 +55,7 @@ struct MenuBarMenuView: View {
         Button("取消会话") {
             model.interactionCoordinator.handleCancelInput()
         }
-        .disabled(model.sessionStore.phase == .idle)
+        .disabled(!canCancelSession)
         .globalKeyboardShortcut(.cancelSession)
 
         Divider()
@@ -84,5 +84,14 @@ struct MenuBarMenuView: View {
 
     private var primaryToggleTitle: String {
         model.sessionStore.phase == .listening ? "停止并处理" : "开始听写"
+    }
+
+    private var canCancelSession: Bool {
+        switch model.sessionStore.phase {
+        case .listening, .transcribing, .textProcessing, .inserting:
+            return true
+        case .idle, .cancelled, .error:
+            return false
+        }
     }
 }
