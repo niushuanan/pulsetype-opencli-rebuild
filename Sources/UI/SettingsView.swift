@@ -153,7 +153,7 @@ struct SettingsView: View {
     private var settingsPage: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                pageTitleText("设置", subtitle: "只保留快捷键、模型设置和自定义提示词。")
+                pageTitleText("设置")
                 hotkeySection
                 providerSection
             }
@@ -196,39 +196,55 @@ struct SettingsView: View {
     }
 
     private var hotkeySection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("快捷键")
                 .font(PulseUI.Typography.sectionTitle)
+                .padding(.bottom, 10)
 
-            Picker("开始方式", selection: wakeTriggerModeBinding) {
-                ForEach(HotkeyTriggerMode.allCases) { mode in
-                    Text(mode.displayName).tag(mode)
+            HStack(alignment: .center) {
+                Text("开始方式")
+                    .font(PulseUI.Typography.bodyStrong)
+                Spacer()
+                Picker("开始方式", selection: wakeTriggerModeBinding) {
+                    ForEach(HotkeyTriggerMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
                 }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 250)
             }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 260)
+            .padding(.vertical, 10)
+
+            Divider()
 
             if hotkeyStateStore.wakeTriggerMode == .modifierTap {
                 HStack(spacing: 10) {
                     Text("单键")
-                        .font(PulseUI.Typography.captionStrong)
+                        .font(PulseUI.Typography.bodyStrong)
+                    Spacer()
                     Picker("单键", selection: wakeModifierBinding) {
                         ForEach(HotkeyModifier.allCases) { modifier in
                             Text(modifier.displayName).tag(modifier)
                         }
                     }
                     .labelsHidden()
-                    .frame(maxWidth: 180, alignment: .leading)
+                    .frame(width: 180, alignment: .trailing)
                     .pickerStyle(.menu)
                 }
+                .padding(.vertical, 10)
             } else {
                 HStack {
                     Text("组合键")
-                        .font(PulseUI.Typography.captionStrong)
+                        .font(PulseUI.Typography.bodyStrong)
+                    Spacer()
                     KeyboardShortcuts.Recorder("", name: .wakeSession)
                         .frame(width: 220)
                 }
+                .padding(.vertical, 10)
             }
+
+            Divider()
 
             HStack {
                 Text("取消会话")
@@ -238,16 +254,15 @@ struct SettingsView: View {
                     .font(PulseUI.Typography.monospacedMeta)
                     .pulseSecondaryText()
             }
+            .padding(.vertical, 10)
 
             if let conflict = hotkeyStateStore.conflictMessage {
+                Divider()
                 Label(conflict, systemImage: "exclamationmark.triangle.fill")
                     .font(PulseUI.Typography.caption)
                     .foregroundStyle(PulseUI.ColorTokens.warning)
+                    .padding(.top, 10)
             }
-
-            Text(hotkeySectionSubtitle)
-                .font(PulseUI.Typography.caption)
-                .pulseSecondaryText()
         }
         .padding(16)
         .controlCenterSectionGroup()
@@ -322,8 +337,8 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("自定义提示词")
-                    .font(PulseUI.Typography.sectionTitle)
-                Text("这里修改后，下一次文字整理会直接生效。")
+                .font(PulseUI.Typography.sectionTitle)
+                Text("修改后下一次文字整理会直接生效。")
                     .font(PulseUI.Typography.caption)
                     .pulseSecondaryText()
 
@@ -368,15 +383,18 @@ struct SettingsView: View {
         clearAction: @escaping () -> Void,
         testAction: @escaping () -> Void
     ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             Text(title)
                 .font(PulseUI.Typography.bodyStrong)
+                .padding(.bottom, 10)
 
             TextField("接口地址（Base URL）", text: baseURL)
                 .textFieldStyle(.roundedBorder)
+                .padding(.bottom, 10)
 
             TextField("模型名", text: modelName)
                 .textFieldStyle(.roundedBorder)
+                .padding(.bottom, 10)
 
             HStack(spacing: 8) {
                 SecureField(apiKeyPlaceholder(for: credentialState), text: apiKeyDraft)
@@ -390,21 +408,29 @@ struct SettingsView: View {
                 }
                 .controlCenterSecondaryActionButton()
             }
+            .padding(.bottom, 10)
 
-            Button(isTesting ? "测试中" : "测试连接") {
-                testAction()
+            HStack {
+                Button(isTesting ? "测试中" : "测试连接") {
+                    testAction()
+                }
+                .controlCenterPrimaryActionButton()
+                .disabled(isTesting || validationMessage != nil)
+
+                Spacer()
             }
-            .controlCenterPrimaryActionButton()
-            .disabled(isTesting || validationMessage != nil)
+            .padding(.bottom, 8)
 
             if let validationMessage {
                 Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(PulseUI.Typography.caption)
                     .foregroundStyle(PulseUI.ColorTokens.warning)
+                    .padding(.bottom, 6)
             }
 
             if let latestResult {
                 connectionResultCompactView(latestResult)
+                    .padding(.bottom, 6)
             }
 
             if credentialState == .saved {
