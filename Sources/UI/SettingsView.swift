@@ -79,8 +79,8 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 pageTitleText(
-                    "语音输入概览",
-                    subtitle: homeInstructionText
+                    "首页",
+                    subtitle: "单键开口即写，ASR 转写与智能整理无缝衔接，语音内容可直接成为可用成稿。"
                 )
                 homeProductIntroCard
                 metricsGrid
