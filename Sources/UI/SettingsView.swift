@@ -102,7 +102,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(maxWidth: 320)
+                    .fixedSize(horizontal: true, vertical: false)
 
                     Spacer()
 
@@ -112,8 +112,6 @@ struct SettingsView: View {
                     .controlCenterSecondaryActionButton()
                     .disabled(localHistoryStore.entries.isEmpty)
                 }
-                .padding(12)
-                .controlCenterSectionGroup()
 
                 if filteredHistoryEntries.isEmpty {
                     emptyHistoryCard
@@ -198,7 +196,7 @@ struct SettingsView: View {
     }
 
     private var homeMetricColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(minimum: 128), spacing: 12), count: 4)
+        [GridItem(.adaptive(minimum: 220, maximum: 360), spacing: 12, alignment: .top)]
     }
 
     private var hotkeySection: some View {

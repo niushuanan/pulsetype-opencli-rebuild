@@ -35,6 +35,7 @@ struct HomeMetricCard: View {
                 .pulseTertiaryText()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: 230, alignment: .topLeading)
         .padding(14)
         .controlCenterInsetPanel()
     }
