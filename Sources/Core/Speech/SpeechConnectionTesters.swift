@@ -67,8 +67,6 @@ struct ASRConnectionTester {
                 apiKey: apiKey,
                 audioData: audioData
             )
-        case .localSenseVoice:
-            return LocalSenseVoiceHealthChecker.check(config: config)
         case .openAI, .openAICompatible:
             return await testOpenAICompatible(
                 config: config,

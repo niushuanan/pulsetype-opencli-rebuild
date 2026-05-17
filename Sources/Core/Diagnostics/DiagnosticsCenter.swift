@@ -12,8 +12,8 @@ struct DiagnosticsCenter {
     func summaryLines() -> [String] {
         [
             "Version \(appVersion) (\(buildNumber))",
-            "Helper app mode with menu bar lifecycle",
-            "Local-first history and settings roadmap"
+            "普通听写：ASR -> DeepSeek -> 写入",
+            "本地历史与诊断日志"
         ]
     }
 }

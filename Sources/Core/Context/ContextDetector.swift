@@ -10,27 +10,11 @@ struct FocusedAppContext: Equatable {
     let strategyHint: String
 }
 
-struct ContextSnapshot: Equatable {
-    let focusContext: FocusedAppContext
-    let rewriteAvailable: Bool
-    let styleHint: String
-}
-
 protocol ContextDetector {
-    func currentSnapshot() -> ContextSnapshot
     func focusedAppContext() -> FocusedAppContext
 }
 
 struct AccessibilityContextDetector: ContextDetector {
-    func currentSnapshot() -> ContextSnapshot {
-        let focusContext = focusedAppContext()
-        return ContextSnapshot(
-            focusContext: focusContext,
-            rewriteAvailable: focusContext.hasEditableTarget,
-            styleHint: "自适应"
-        )
-    }
-
     func focusedAppContext() -> FocusedAppContext {
         let app = NSWorkspace.shared.frontmostApplication
         let appName = app?.localizedName ?? "未知应用"
@@ -152,21 +136,13 @@ struct AccessibilityContextDetector: ContextDetector {
 }
 
 struct StubContextDetector: ContextDetector {
-    func currentSnapshot() -> ContextSnapshot {
-        ContextSnapshot(
-            focusContext: FocusedAppContext(
-                appName: "未知应用",
-                bundleID: "unknown.bundle",
-                focusedRole: nil,
-                hasEditableTarget: true,
-                strategyHint: "优先尝试 AX 直写，失败后切换粘贴兜底。"
-            ),
-            rewriteAvailable: true,
-            styleHint: "自适应"
-        )
-    }
-
     func focusedAppContext() -> FocusedAppContext {
-        currentSnapshot().focusContext
+        FocusedAppContext(
+            appName: "未知应用",
+            bundleID: "unknown.bundle",
+            focusedRole: nil,
+            hasEditableTarget: true,
+            strategyHint: "优先尝试 AX 直写，失败后切换粘贴兜底。"
+        )
     }
 }

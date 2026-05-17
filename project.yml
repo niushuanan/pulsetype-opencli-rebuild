@@ -5,8 +5,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: 5.10
-    CURRENT_PROJECT_VERSION: 4
-    MARKETING_VERSION: 2.1
+    CURRENT_PROJECT_VERSION: 5
+    MARKETING_VERSION: 2.2
     CODE_SIGN_STYLE: Automatic
 packages:
   KeyboardShortcuts:
@@ -19,9 +19,6 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: Sources
-        excludes:
-          - Core/V4/README.md
-          - Core/V4/Memory/V4MemoryContracts.swift
       - path: Config/AppRuntimePolicy.plist
         buildPhase: resources
     configFiles:
@@ -34,14 +31,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.niushuanan.PulseType
         PRODUCT_NAME: PulseType
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: PulseType 语音助手
+        INFOPLIST_KEY_CFBundleDisplayName: PulseType 语音输入法
         INFOPLIST_KEY_CFBundleIconFile: AppIcon
         INFOPLIST_KEY_CFBundleIconName: AppIcon
         INFOPLIST_KEY_LSUIElement: "NO"
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: PulseType 会在你开始语音会话时录音，用于转写与改写。
-        INFOPLIST_KEY_NSAppleEventsUsageDescription: PulseType 需要自动化权限，用于把文本写回到其他应用。
-        INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: PulseType 需要访问日历，用于根据语音指令创建日程。
-        INFOPLIST_KEY_NSCalendarsWriteOnlyAccessUsageDescription: PulseType 需要写入日历，用于根据语音指令创建日程。
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: PulseType 会在你开始普通听写时录音，用于 ASR 转写与 DeepSeek 文本整理。
+        INFOPLIST_KEY_NSAppleEventsUsageDescription: PulseType 需要自动化权限，用于把文本写入到其他应用。
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
 
   PulseTypeTests:

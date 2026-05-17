@@ -12,7 +12,6 @@ CREDENTIAL_FILE="$HOME/Library/Application Support/PulseType/Credentials/credent
 KEYCHAIN_SERVICE_V1="com.niushuanan.PulseType.provider-profile"
 KEYCHAIN_SERVICE_V2="com.niushuanan.PulseType.provider-profile.v2"
 KEYCHAIN_SERVICE_V3="com.niushuanan.PulseType.provider-profile.v3"
-KEYCHAIN_SERVICE_V4="com.niushuanan.PulseType.provider-profile.v4"
 LSREGISTER="$PULSETYPE_LSREGISTER_PATH"
 
 print_header() {
@@ -95,7 +94,7 @@ else
 fi
 
 print_header "兼容钥匙串条目摘要（仅迁移用途）"
-for svc in "$KEYCHAIN_SERVICE_V1" "$KEYCHAIN_SERVICE_V2" "$KEYCHAIN_SERVICE_V3" "$KEYCHAIN_SERVICE_V4"; do
+for svc in "$KEYCHAIN_SERVICE_V1" "$KEYCHAIN_SERVICE_V2" "$KEYCHAIN_SERVICE_V3"; do
   echo "-- service: $svc"
   for acc in asr.primary text.primary; do
     if security find-generic-password -s "$svc" -a "$acc" >/dev/null 2>&1; then

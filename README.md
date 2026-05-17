@@ -1,131 +1,35 @@
-# PulseType 2.1
+# PulseType
 
-PulseType 是一个 macOS 常驻语音助手。你不用切输入法，也不用切窗口，按键开口就能把内容直接写进当前 app。
+PulseType 是一个 macOS 普通语音输入法。
 
-2.1 继续沿着同一方向：把“说一句就能办完一件事”做实，覆盖写字、改写、系统动作、CLI 动作四类场景，并把魔术先生执行链路与稳定性再做了一轮加强。
+当前版本只保留一条主链：
 
-## 2.1 更新要点
+1. 录音。
+2. ASR 语音识别。
+3. DeepSeek 文本整理。
+4. 写入当前输入位置，失败时提示用户。
+5. 在历史里保存普通听写结果。
 
-- 魔术先生默认主链已切到 V4：`AgentLoop + ToolKernel + Memory + TimeMachine`
-- 魔术先生 Agent 流程重构，命令路由更稳定
-- 飞书 CLI 执行链路加固，参数与权限诊断更清晰
-- 音乐控制链路修复，降低误判成功与错误匹配
-- 全部分支能力合流到同一代码基线，便于持续迭代
+## 功能范围
 
-## V4 内核（当前默认）
+保留：
 
-现在魔术先生默认只走 V4 主链：
+- 普通听写。
+- ASR 服务设置。
+- DeepSeek 文本整理设置。
+- 麦克风与辅助功能权限检查。
+- 普通听写历史。
+- 菜单栏启动、停止、取消。
 
-- `InteractionCoordinator` 负责入口桥接、HUD 状态桥、历史桥
-- `V4 AgentLoop` 负责计划、步骤推进、turn 决策
-- `V4 ToolKernel` 负责统一工具注册、权限、retry、evidence
-- `V4 Memory` 负责把本地历史转成可检索上下文
-- `V4 TimeMachine` 负责时间解析、记录、提醒调度
-
-legacy runtime 还保留在仓库里，但只允许在 debug 显式开关下做排障兜底，不再是默认执行面。
-
-## 2.1 现在能做什么
-
-### 三种交互模式
-
-- `主键单击`：普通语音（开始/结束）
-- `主键长按（>=180ms）`：魔术先生（按住说，松开执行）
-- `脑暴键双击（<=350ms）`：一口气全念对
-- `Esc`：取消当前会话
-
-默认主键与脑暴键都是 `右 Shift`，可在设置页调整。
-
-### 魔术先生（2.1 核心）
-
-有选中时：
-
-- 翻译、润色、扩写、精简、纠错
-- 按选中内容建日程
-- 写入备忘录
-- 整理邮件（地址明确时可直接发，不明确时仅打开 Mail 编辑）
-
-无选中时：
-
-- 作为文本命令助手直接生成内容
-- 在开启 `CLI 模式（飞书）` 后，可直接语音下令执行飞书 CLI 动作
-
-另外还支持一句话控制 Music（播放、暂停、继续、切歌）。
-
-### 时光机
-
-魔术先生现在还支持把“以后要提醒我”这类话直接记进时光机：
-
-- 记录未来事项
-- 记录并创建本地提醒
-- 把时间解析结果、提醒状态、执行 trace 一起写进历史
-
-### 一口气全念对
-
-面向短时讨论或多人脑暴。你先完整说完，系统会自动整理成更适合下一步给 AI 分析的上下文，同时放进输入框和剪贴板。
-
-## 控制台页面（当前产品形态）
-
-- `首页`：核心能力说明 + 历史效率统计
-- `记忆`：本地会话记录筛选、复制、删除
-- `词典`：ASR 热词（每行一个，保存后马上生效）
-- `Skill`：规则开关与参数（含按应用风格策略）
-- `模型`：`ASR / 文本处理 / CLI 模式（Agent）` 三路独立配置与连通测试
-- `魔术先生`：文本权限、飞书 CLI、苹果原生能力统一配置
-- `一口气全念对`：触发方式与模型建议时长
-- `设置`：快捷键、权限中心、运行状态提示
-
-## 模型与默认配置
-
-- `ASR` 默认：`阿里云 Qwen ASR`（`qwen3-asr-flash`）
-- `文本处理` 默认：`OpenAI 兼容`（`https://api.deepseek.com` / `deepseek-v4-flash`，显式关闭 thinking）
-- `CLI 模式（Agent）` 默认：同上，可单独改
-- 可切换本地 `SenseVoice`（含环境准备与健康检测）
-
-## 安装与启动
-
-1. 生成工程
+## 本地开发
 
 ```bash
 xcodegen generate
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project PulseType.xcodeproj -scheme PulseType -configuration Debug build
 ```
 
-2. 安装到 `/Applications/PulseType.app`
+安装到 `/Applications/PulseType.app`：
 
 ```bash
-./scripts/install-local-app.sh
-```
-
-3. 打开 `/Applications/PulseType.app`
-
-4. 在“模型”页填好密钥并完成三路连通测试
-
-5. 在“设置”页确认麦克风与辅助功能权限
-
-6. 试跑三种交互模式
-
-## 本地优先与边界
-
-- 记录与配置默认保存在本地目录
-- 写字与改写依赖目标 app 的 Accessibility 实现
-- 日程、备忘录、邮件、音乐能力依赖系统权限与本机 app 可用性
-- 当前依旧是本地开发安装形态，暂无签名公证安装包
-
-## 开发测试
-
-快速关键用例（推荐）：
-
-```bash
-./scripts/test-magician-fast.sh
-```
-
-全量测试：
-
-```bash
-./scripts/test-magician-fast.sh --full
-```
-
-环境检查：
-
-```bash
-./scripts/doctor-runtime.sh
+scripts/install-local-app.sh
 ```

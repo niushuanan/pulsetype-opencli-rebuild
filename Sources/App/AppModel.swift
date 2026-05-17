@@ -42,24 +42,17 @@ final class AppModel: ObservableObject {
     let globalHotkeyService: GlobalHotkeyService
     let interactionCoordinator: InteractionCoordinator
     let audioCaptureService: AudioCaptureService
-    let skillRuleStore: SkillRuleStore
-    let magicianFeatureToggleStore: MagicianFeatureToggleStore
-    let mailAddressBookStore: MailAddressBookStore
     let providerSettingsStore: ProviderSettingsStore
-    let asrDictionaryStore: ASRDictionaryStore
-    let localSenseVoiceRuntimeManager: LocalSenseVoiceRuntimeManager
     let speechProviderRegistry: SpeechProviderRegistry
-    let rewriteProviderRegistry: RewriteProviderRegistry
     let textOutputCoordinator: TextOutputCoordinator
     let contextDetector: ContextDetector
     let appScenePolicyStore: AppScenePolicyStore
     let permissionsCenter: PermissionsCenter
     let localStore: LocalStore
     let localHistoryStore: LocalHistoryStore
-    let brainstormDurationProfileStore: BrainstormDurationProfileStore
     let diagnosticsCenter: DiagnosticsCenter
-    let statusPulseHUDController: StatusPulseHUDController
     let toastPresenter: ToastPresenter
+
     private let runtimePolicy = AppRuntimePolicy.current()
     private var cancellables = Set<AnyCancellable>()
     private var controlCenterWindowOpener: (() -> Void)?
@@ -71,23 +64,15 @@ final class AppModel: ObservableObject {
         globalHotkeyService: GlobalHotkeyService,
         interactionCoordinator: InteractionCoordinator,
         audioCaptureService: AudioCaptureService,
-        skillRuleStore: SkillRuleStore,
-        magicianFeatureToggleStore: MagicianFeatureToggleStore,
-        mailAddressBookStore: MailAddressBookStore,
         providerSettingsStore: ProviderSettingsStore,
-        asrDictionaryStore: ASRDictionaryStore,
-        localSenseVoiceRuntimeManager: LocalSenseVoiceRuntimeManager,
         speechProviderRegistry: SpeechProviderRegistry,
-        rewriteProviderRegistry: RewriteProviderRegistry,
         textOutputCoordinator: TextOutputCoordinator,
         contextDetector: ContextDetector,
         appScenePolicyStore: AppScenePolicyStore,
         permissionsCenter: PermissionsCenter,
         localStore: LocalStore,
         localHistoryStore: LocalHistoryStore,
-        brainstormDurationProfileStore: BrainstormDurationProfileStore,
         diagnosticsCenter: DiagnosticsCenter,
-        statusPulseHUDController: StatusPulseHUDController,
         toastPresenter: ToastPresenter
     ) {
         self.controlCenterState = controlCenterState
@@ -96,23 +81,15 @@ final class AppModel: ObservableObject {
         self.globalHotkeyService = globalHotkeyService
         self.interactionCoordinator = interactionCoordinator
         self.audioCaptureService = audioCaptureService
-        self.skillRuleStore = skillRuleStore
-        self.magicianFeatureToggleStore = magicianFeatureToggleStore
-        self.mailAddressBookStore = mailAddressBookStore
         self.providerSettingsStore = providerSettingsStore
-        self.asrDictionaryStore = asrDictionaryStore
-        self.localSenseVoiceRuntimeManager = localSenseVoiceRuntimeManager
         self.speechProviderRegistry = speechProviderRegistry
-        self.rewriteProviderRegistry = rewriteProviderRegistry
         self.textOutputCoordinator = textOutputCoordinator
         self.contextDetector = contextDetector
         self.appScenePolicyStore = appScenePolicyStore
         self.permissionsCenter = permissionsCenter
         self.localStore = localStore
         self.localHistoryStore = localHistoryStore
-        self.brainstormDurationProfileStore = brainstormDurationProfileStore
         self.diagnosticsCenter = diagnosticsCenter
-        self.statusPulseHUDController = statusPulseHUDController
         self.toastPresenter = toastPresenter
 
         migrateLegacyLocalState()
@@ -120,11 +97,9 @@ final class AppModel: ObservableObject {
         if !Self.isRunningUnderTests() {
             permissionsCenter.autoRequestOnLaunchIfNeeded()
         }
-        bindStatusPulse()
         bindGlobalHotkeyRuntimeState()
         bindAppLifecycle()
         activateGlobalHotkeys()
-        probeLocalSenseVoiceRuntime()
     }
 
     static func bootstrap() -> AppModel {
@@ -132,28 +107,17 @@ final class AppModel: ObservableObject {
         let sessionStore = SessionStore()
         let permissionsCenter = PermissionsCenter()
         let audioCaptureService = AVAudioRecorderCaptureService(temporaryDirectory: store.temporaryAudioDirectory)
-        let skillRuleStore = SkillRuleStore()
-        let magicianFeatureToggleStore = MagicianFeatureToggleStore()
-        let mailAddressBookStore = MailAddressBookStore()
         let credentialStore = CredentialStoreFactory.makeProviderCredentialStore(
             credentialsDirectory: store.credentialsDirectory
         )
         let providerSettingsStore = ProviderSettingsStore(
             credentialStore: credentialStore
         )
-        let asrDictionaryStore = ASRDictionaryStore()
-        let localSenseVoiceRuntimeManager = LocalSenseVoiceRuntimeManager(
-            runtimeRoot: store.senseVoiceRuntimeDirectory
-        )
         let speechProviderRegistry = SpeechProviderRegistry(
             providers: [
                 OpenAITranscriptionProvider(),
-                DashScopeQwenASRProvider(),
-                LocalSenseVoiceProvider()
+                DashScopeQwenASRProvider()
             ]
-        )
-        let rewriteProviderRegistry = RewriteProviderRegistry(
-            providers: [OpenAIRewriteProvider()]
         )
         let contextDetector = AccessibilityContextDetector()
         let appScenePolicyStore = AppScenePolicyStore()
@@ -162,26 +126,8 @@ final class AppModel: ObservableObject {
             contextDetector: contextDetector
         )
         let localHistoryStore = LocalHistoryStore(historyDirectory: store.historyDirectory)
-        let brainstormDurationProfileStore = BrainstormDurationProfileStore(
-            historyDirectory: store.historyDirectory
-        )
         let speechPipelineLogger = SpeechPipelineLogger(
             diagnosticsDirectory: store.diagnosticsDirectory
-        )
-        let workflowTelemetryReporter = WorkflowTelemetryReporter(
-            diagnosticsDirectory: store.diagnosticsDirectory,
-            speechPipelineLogger: speechPipelineLogger
-        )
-        let v4RuntimeSwitchStore = V4RuntimeSwitchStore()
-        let v4MemoryPlannerInputAdapter = V4MemoryQueryPlannerInputAdapter(
-            timeMachineHistoryDirectory: store.historyDirectory
-        )
-        let v4MagicianRuntime = V4MagicianRuntimeAdapter(
-            historyDirectory: store.historyDirectory,
-            providerSettingsStore: providerSettingsStore,
-            skillRuleStore: skillRuleStore,
-            appScenePolicyStore: appScenePolicyStore,
-            featureToggleStore: magicianFeatureToggleStore
         )
         let controlCenterState = ControlCenterState(localHistoryStore: localHistoryStore)
         let hotkeyStateStore = HotkeyStateStore()
@@ -192,21 +138,11 @@ final class AppModel: ObservableObject {
             audioCaptureService: audioCaptureService,
             providerSettingsStore: providerSettingsStore,
             providerRegistry: speechProviderRegistry,
-            rewriteProviderRegistry: rewriteProviderRegistry,
             textOutputCoordinator: textOutputCoordinator,
             contextDetector: contextDetector,
             appScenePolicyStore: appScenePolicyStore,
             localHistoryStore: localHistoryStore,
-            brainstormDurationProfileStore: brainstormDurationProfileStore,
             speechPipelineLogger: speechPipelineLogger,
-            skillRuleStore: skillRuleStore,
-            asrDictionaryStore: asrDictionaryStore,
-            mailAddressBookStore: mailAddressBookStore,
-            magicianFeatureToggleStore: magicianFeatureToggleStore,
-            workflowTelemetryReporter: workflowTelemetryReporter,
-            v4MagicianRuntime: v4MagicianRuntime,
-            v4RuntimeSwitchStore: v4RuntimeSwitchStore,
-            v4MemoryPlannerInputAdapter: v4MemoryPlannerInputAdapter,
             toastPresenter: toastPresenter
         )
         return AppModel(
@@ -219,23 +155,15 @@ final class AppModel: ObservableObject {
             ),
             interactionCoordinator: interactionCoordinator,
             audioCaptureService: audioCaptureService,
-            skillRuleStore: skillRuleStore,
-            magicianFeatureToggleStore: magicianFeatureToggleStore,
-            mailAddressBookStore: mailAddressBookStore,
             providerSettingsStore: providerSettingsStore,
-            asrDictionaryStore: asrDictionaryStore,
-            localSenseVoiceRuntimeManager: localSenseVoiceRuntimeManager,
             speechProviderRegistry: speechProviderRegistry,
-            rewriteProviderRegistry: rewriteProviderRegistry,
             textOutputCoordinator: textOutputCoordinator,
             contextDetector: contextDetector,
             appScenePolicyStore: appScenePolicyStore,
             permissionsCenter: permissionsCenter,
             localStore: store,
             localHistoryStore: localHistoryStore,
-            brainstormDurationProfileStore: brainstormDurationProfileStore,
             diagnosticsCenter: DiagnosticsCenter(),
-            statusPulseHUDController: StatusPulseHUDController(),
             toastPresenter: toastPresenter
         )
     }
@@ -251,9 +179,7 @@ final class AppModel: ObservableObject {
         if NSClassFromString("XCTestCase") != nil {
             return true
         }
-        if ProcessInfo.processInfo.arguments.contains(where: {
-            $0.localizedCaseInsensitiveContains("xctest")
-        }) {
+        if ProcessInfo.processInfo.arguments.contains(where: { $0.localizedCaseInsensitiveContains("xctest") }) {
             return true
         }
         return false
@@ -265,51 +191,9 @@ final class AppModel: ObservableObject {
 
     func purgeAllUsageData() {
         localHistoryStore.clearAll()
-        brainstormDurationProfileStore.clearAll()
-        removeItemIfExists(
-            at: V4TimeMachineStore.storageURL(historyDirectory: localStore.historyDirectory)
-        )
-
         purgeDirectoryContents(localStore.historyDirectory)
         purgeDirectoryContents(localStore.diagnosticsDirectory)
         purgeDirectoryContents(localStore.temporaryAudioDirectory)
-        removeItemIfExists(at: localStore.rootDirectory.appendingPathComponent("MagicianNative", isDirectory: true))
-        removeItemIfExists(at: localStore.rootDirectory.appendingPathComponent("MagicianV2", isDirectory: true))
-
-        interactionCoordinator.ensureBrainstormDurationProfile()
-    }
-
-    private func bindStatusPulse() {
-        sessionStore.$phase
-            .combineLatest(
-                sessionStore.$activeLane,
-                sessionStore.$statusMessage,
-                sessionStore.$hudProgressHint
-            )
-            .combineLatest(sessionStore.$listeningLevel)
-            .map({ payload -> StatusPulsePayload in
-                let (state, listeningLevel) = payload
-                let (phase, lane, message, progressHint) = state
-                return StatusPulsePayload(
-                    phase: phase,
-                    lane: lane,
-                    message: message,
-                    progressHint: progressHint,
-                    listeningLevel: max(0, min(1, listeningLevel))
-                )
-            })
-            .removeDuplicates()
-            .dropFirst()
-            .sink { [weak self] (payload: StatusPulsePayload) in
-                self?.statusPulseHUDController.show(
-                    phase: payload.phase,
-                    lane: payload.lane,
-                    message: payload.message,
-                    progressHint: payload.progressHint,
-                    listeningLevel: payload.listeningLevel
-                )
-            }
-            .store(in: &cancellables)
     }
 
     private func activateGlobalHotkeys() {
@@ -339,14 +223,6 @@ final class AppModel: ObservableObject {
                 self?.permissionsCenter.refreshStatuses()
             }
             .store(in: &cancellables)
-    }
-
-    private func probeLocalSenseVoiceRuntime() {
-        Task {
-            await localSenseVoiceRuntimeManager.detect(
-                modelDirectoryPath: providerSettingsStore.asrConfig.localModelPath
-            )
-        }
     }
 
     private func migrateLegacyLocalState() {
@@ -403,9 +279,7 @@ final class AppModel: ObservableObject {
 
             guard
                 !removedPaths.isEmpty,
-                fileManager.isExecutableFile(
-                    atPath: self.runtimePolicy.launchServicesToolPath
-                )
+                fileManager.isExecutableFile(atPath: self.runtimePolicy.launchServicesToolPath)
             else {
                 return
             }
@@ -434,25 +308,8 @@ final class AppModel: ObservableObject {
         ) else {
             return
         }
-
         for child in children {
             try? FileManager.default.removeItem(at: child)
         }
     }
-
-    private func removeItemIfExists(at url: URL) {
-        let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: url.path) else {
-            return
-        }
-        try? fileManager.removeItem(at: url)
-    }
-}
-
-private struct StatusPulsePayload: Equatable {
-    let phase: SessionPhase
-    let lane: InputLane
-    let message: String
-    let progressHint: Double
-    let listeningLevel: Double
 }

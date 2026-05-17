@@ -45,8 +45,7 @@ struct OpenAITranscriptionProvider: SpeechTranscriptionProvider {
             configuration: configuration,
             fileURL: fileURL,
             audioData: audioData,
-            format: format,
-            promptHint: request.dictionaryPromptHint
+            format: format
         )
 
         let responseData: Data
@@ -112,8 +111,7 @@ struct OpenAITranscriptionProvider: SpeechTranscriptionProvider {
         configuration: SpeechProviderConfiguration,
         fileURL: URL,
         audioData: Data,
-        format: OpenAIAudioFormat,
-        promptHint: String?
+        format: OpenAIAudioFormat
     ) -> Data {
         var body = Data()
         body.appendUTF8("--\(boundary)\r\n")
@@ -124,11 +122,6 @@ struct OpenAITranscriptionProvider: SpeechTranscriptionProvider {
         body.appendUTF8("Content-Disposition: form-data; name=\"response_format\"\r\n\r\n")
         body.appendUTF8("json\r\n")
 
-        if let promptHint, !promptHint.isEmpty {
-            body.appendUTF8("--\(boundary)\r\n")
-            body.appendUTF8("Content-Disposition: form-data; name=\"prompt\"\r\n\r\n")
-            body.appendUTF8("\(promptHint)\r\n")
-        }
 
         body.appendUTF8("--\(boundary)\r\n")
         body.appendUTF8("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileURL.lastPathComponent)\"\r\n")
@@ -270,7 +263,7 @@ struct DashScopeQwenASRProvider: SpeechTranscriptionProvider {
             model: configuration.modelName,
             input: .init(
                 messages: [
-                    .init(role: "system", content: [.text(request.dictionaryPromptHint ?? "")]),
+                    .init(role: "system", content: [.text("请把音频转写成简体中文文本，只返回转写结果。")]),
                     .init(
                         role: "user",
                         content: [

@@ -29,7 +29,7 @@ struct MenuBarStatusView: View {
             return PulseUI.ColorTokens.glow
         case .transcribing:
             return PulseUI.ColorTokens.glow.opacity(0.82)
-        case .rewriting:
+        case .textProcessing:
             return PulseUI.ColorTokens.textSecondary
         case .inserting:
             return PulseUI.ColorTokens.success
@@ -46,7 +46,7 @@ struct MenuBarStatusView: View {
         }
         if sessionStore.phase.isBusyPhase {
             if
-                sessionStore.phase == .rewriting,
+                sessionStore.phase == .textProcessing,
                 let preview = sessionStore.liveOutputPreview,
                 !preview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
@@ -115,7 +115,7 @@ private struct BusyPhaseDots: View {
 private extension SessionPhase {
     var isBusyPhase: Bool {
         switch self {
-        case .transcribing, .rewriting, .inserting:
+        case .transcribing, .textProcessing, .inserting:
             return true
         case .idle, .listening, .cancelled, .error:
             return false

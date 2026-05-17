@@ -4,7 +4,7 @@ enum SessionPhase: String, CaseIterable {
     case idle
     case listening
     case transcribing
-    case rewriting
+    case textProcessing
     case inserting
     case cancelled
     case error
@@ -14,13 +14,13 @@ enum SessionPhase: String, CaseIterable {
         case .idle:
             return "待命"
         case .listening:
-            return "聆听中"
+            return "听写中"
         case .transcribing:
-            return "转写中"
-        case .rewriting:
-            return "执行中"
+            return "ASR 转写中"
+        case .textProcessing:
+            return "DeepSeek 处理中"
         case .inserting:
-            return "写回中"
+            return "写入中"
         case .cancelled:
             return "已取消"
         case .error:
@@ -36,8 +36,8 @@ enum SessionPhase: String, CaseIterable {
             return "waveform.circle.fill"
         case .transcribing:
             return "text.bubble"
-        case .rewriting:
-            return "wand.and.stars"
+        case .textProcessing:
+            return "sparkles"
         case .inserting:
             return "arrow.down.doc"
         case .cancelled:

@@ -3,15 +3,11 @@ import Security
 
 let defaultASRCredentialKeyRef = "asr.primary"
 let defaultTextCredentialKeyRef = "text.primary"
-let defaultCLITextCredentialKeyRef = "text.cli"
-let defaultSenseVoiceModelPath =
-    "~/Library/Application Support/Shandianshuo/models/sensevoice-small"
 
 enum ProviderType: String, CaseIterable, Codable, Identifiable {
     case openAI
     case openAICompatible
     case dashScopeQwenASR
-    case localSenseVoice
 
     var id: String { rawValue }
 
@@ -23,8 +19,6 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
             return "OpenAI 兼容"
         case .dashScopeQwenASR:
             return "阿里云 Qwen ASR"
-        case .localSenseVoice:
-            return "本地 SenseVoice"
         }
     }
 
@@ -36,8 +30,6 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
             return "兼容"
         case .dashScopeQwenASR:
             return "Qwen"
-        case .localSenseVoice:
-            return "本地"
         }
     }
 
@@ -45,49 +37,38 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .dashScopeQwenASR:
             return "qwen3-asr-flash"
-        case .localSenseVoice:
-            return "sensevoice-small"
         case .openAI, .openAICompatible:
             return "whisper-1"
         }
     }
 
-    var defaultRewriteModelName: String {
+    var defaultTextProcessingModelName: String {
         switch self {
         case .openAI:
             return "gpt-4o-mini"
-        case .openAICompatible:
-            return "deepseek-v4-flash"
-        case .dashScopeQwenASR:
-            return "deepseek-v4-flash"
-        case .localSenseVoice:
+        case .openAICompatible, .dashScopeQwenASR:
             return "deepseek-v4-flash"
         }
     }
 
     var supportsTranscription: Bool {
         switch self {
-        case .openAI, .openAICompatible, .dashScopeQwenASR, .localSenseVoice:
+        case .openAI, .openAICompatible, .dashScopeQwenASR:
             return true
         }
     }
 
-    var supportsRewrite: Bool {
+    var supportsTextProcessing: Bool {
         switch self {
         case .openAI, .openAICompatible:
             return true
-        case .dashScopeQwenASR, .localSenseVoice:
+        case .dashScopeQwenASR:
             return false
         }
     }
 
     var requiresAPIKey: Bool {
-        switch self {
-        case .openAI, .openAICompatible, .dashScopeQwenASR:
-            return true
-        case .localSenseVoice:
-            return false
-        }
+        true
     }
 
     var allowsCustomBaseURL: Bool {
@@ -102,8 +83,6 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
             return nil
         case .dashScopeQwenASR:
             return URL(string: "https://dashscope.aliyuncs.com")
-        case .localSenseVoice:
-            return URL(string: "https://local.sensevoice")
         }
     }
 
@@ -122,20 +101,17 @@ struct ASRConfig: Codable, Equatable {
     var baseURLString: String
     var modelName: String
     var keyRef: String
-    var localModelPath: String?
 
     init(
-        providerType: ProviderType = .openAI,
+        providerType: ProviderType = .dashScopeQwenASR,
         baseURLString: String? = nil,
         modelName: String? = nil,
-        keyRef: String = defaultASRCredentialKeyRef,
-        localModelPath: String? = nil
+        keyRef: String = defaultASRCredentialKeyRef
     ) {
         self.providerType = providerType
-        self.baseURLString = baseURLString ?? providerType.fixedBaseURL?.absoluteString ?? ""
+        self.baseURLString = baseURLString ?? providerType.fixedBaseURL?.absoluteString ?? providerType.recommendedBaseURLString
         self.modelName = modelName ?? providerType.defaultTranscriptionModelName
         self.keyRef = keyRef
-        self.localModelPath = localModelPath
     }
 }
 
@@ -146,14 +122,14 @@ struct TextConfig: Codable, Equatable {
     var keyRef: String
 
     init(
-        providerType: ProviderType = .openAI,
+        providerType: ProviderType = .openAICompatible,
         baseURLString: String? = nil,
         modelName: String? = nil,
         keyRef: String = defaultTextCredentialKeyRef
     ) {
         self.providerType = providerType
-        self.baseURLString = baseURLString ?? providerType.fixedBaseURL?.absoluteString ?? ""
-        self.modelName = modelName ?? providerType.defaultRewriteModelName
+        self.baseURLString = baseURLString ?? providerType.fixedBaseURL?.absoluteString ?? providerType.recommendedBaseURLString
+        self.modelName = modelName ?? providerType.defaultTextProcessingModelName
         self.keyRef = keyRef
     }
 }
@@ -164,23 +140,6 @@ struct SpeechProviderConfiguration: Equatable {
     let providerName: String
     let modelName: String
     let baseURL: URL
-    let localModelPath: String?
-
-    init(
-        profileID: String,
-        providerType: ProviderType,
-        providerName: String,
-        modelName: String,
-        baseURL: URL,
-        localModelPath: String? = nil
-    ) {
-        self.profileID = profileID
-        self.providerType = providerType
-        self.providerName = providerName
-        self.modelName = modelName
-        self.baseURL = baseURL
-        self.localModelPath = localModelPath
-    }
 }
 
 struct TextGenerationProviderConfiguration: Equatable {
@@ -195,31 +154,6 @@ struct SpeechTranscriptionRequest {
     let clip: RecordedAudioClip
     let lane: InputLane
     let contextSummary: String
-    let dictionaryTerms: [String]
-    let dictionaryPromptHint: String?
-    let dictionaryHotwordText: String?
-
-    init(
-        clip: RecordedAudioClip,
-        lane: InputLane,
-        contextSummary: String,
-        dictionaryTerms: [String] = [],
-        dictionaryPromptHint: String? = nil,
-        dictionaryHotwordText: String? = nil
-    ) {
-        self.clip = clip
-        self.lane = lane
-        self.contextSummary = contextSummary
-        self.dictionaryTerms = dictionaryTerms
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        let normalizedPrompt = dictionaryPromptHint?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        self.dictionaryPromptHint = (normalizedPrompt?.isEmpty == false) ? normalizedPrompt : nil
-        let normalizedHotword = dictionaryHotwordText?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        self.dictionaryHotwordText = (normalizedHotword?.isEmpty == false) ? normalizedHotword : nil
-    }
 }
 
 struct SpeechTranscriptionResult: Equatable {
@@ -327,14 +261,12 @@ enum ProviderConfigurationValidator {
             return nil
         }
 
-        guard
-            let url = URL(string: normalized),
-            let scheme = url.scheme?.lowercased(),
-            scheme == "http" || scheme == "https"
-        else {
+        guard let url = URL(string: normalized), let scheme = url.scheme?.lowercased() else {
             return nil
         }
-
+        guard ["http", "https"].contains(scheme), url.host != nil else {
+            return nil
+        }
         return url
     }
 }

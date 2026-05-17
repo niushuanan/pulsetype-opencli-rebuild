@@ -30,34 +30,46 @@ final class ProviderSettingsStore: ObservableObject {
         }
     }
 
-    @Published var cliTextConfig: TextConfig {
-        didSet {
-            persistCLITextConfig()
-            if cliTextConfig != oldValue {
-                clearCLITextTestResult()
-            }
-        }
-    }
-
-    @Published var feishuCLIExecutablePathOverride: String {
-        didSet {
-            persistFeishuCLIExecutablePathOverride()
-        }
-    }
-
     @Published var asrAPIKeyDraft: String = ""
     @Published var textAPIKeyDraft: String = ""
-    @Published var cliTextAPIKeyDraft: String = ""
 
     @Published private(set) var asrCredentialState: CredentialState = .unknown
     @Published private(set) var textCredentialState: CredentialState = .unknown
-    @Published private(set) var cliTextCredentialState: CredentialState = .unknown
     @Published private(set) var asrFeedbackMessage: String?
     @Published private(set) var textFeedbackMessage: String?
-    @Published private(set) var cliTextFeedbackMessage: String?
     @Published private(set) var latestASRTestResult: ConnectionTestResult?
     @Published private(set) var latestTextTestResult: ConnectionTestResult?
-    @Published private(set) var latestCLITextTestResult: ConnectionTestResult?
+
+    private let defaults: UserDefaults
+    private let credentialStore: ProviderCredentialStore
+    private let defaultsASRConfigKey = "providers.asr.config.v2"
+    private let defaultsTextConfigKey = "providers.text.config.v2"
+    private let defaultsLatestASRTestResultKey = "providers.asr.test.result.v1"
+    private let defaultsLatestTextTestResultKey = "providers.text.test.result.v1"
+
+    init(
+        defaults: UserDefaults = .standard,
+        credentialStore: ProviderCredentialStore
+    ) {
+        self.defaults = defaults
+        self.credentialStore = credentialStore
+        self.asrConfig = Self.sanitizeASRConfig(
+            Self.decodeASRConfig(from: defaults.data(forKey: defaultsASRConfigKey)) ?? ASRConfig()
+        )
+        self.textConfig = Self.sanitizeTextConfig(
+            Self.decodeTextConfig(from: defaults.data(forKey: defaultsTextConfigKey)) ?? TextConfig()
+        )
+        self.latestASRTestResult = Self.decodeConnectionTestResult(
+            from: defaults.data(forKey: defaultsLatestASRTestResultKey)
+        )
+        self.latestTextTestResult = Self.decodeConnectionTestResult(
+            from: defaults.data(forKey: defaultsLatestTextTestResultKey)
+        )
+
+        persistASRConfig()
+        persistTextConfig()
+        refreshCredentialState(allowUserInteraction: false)
+    }
 
     var feedbackMessage: String? {
         textFeedbackMessage ?? asrFeedbackMessage
@@ -67,7 +79,7 @@ final class ProviderSettingsStore: ObservableObject {
         asrConfig.providerType.displayName
     }
 
-    var selectedRewriteProviderName: String {
+    var selectedTextProcessingProviderName: String {
         textConfig.providerType.displayName
     }
 
@@ -79,12 +91,8 @@ final class ProviderSettingsStore: ObservableObject {
         asrConfig.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var rewriteModelName: String {
+    var textProcessingModelName: String {
         textConfig.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    var cliRewriteModelName: String {
-        cliTextConfig.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var asrConfigurationValidationMessage: String? {
@@ -103,127 +111,32 @@ final class ProviderSettingsStore: ObservableObject {
         )
     }
 
-    var cliTextConfigurationValidationMessage: String? {
-        ProviderConfigurationValidator.validationMessage(
-            providerType: cliTextConfig.providerType,
-            baseURLString: cliTextConfig.baseURLString,
-            modelName: cliTextConfig.modelName
-        )
-    }
-
     var configurationValidationMessage: String? {
         asrConfigurationValidationMessage
-    }
-
-    var rewriteConfigurationValidationMessage: String? {
-        textConfigurationValidationMessage
     }
 
     var isConfigurationValid: Bool {
         asrConfigurationValidationMessage == nil
     }
 
-    var isRewriteConfigurationValid: Bool {
+    var isTextProcessingConfigurationValid: Bool {
         textConfigurationValidationMessage == nil
     }
 
-    var isCLITextConfigurationValid: Bool {
-        cliTextConfigurationValidationMessage == nil
-    }
-
     var configuration: SpeechProviderConfiguration {
-        transcriptionConfiguration ?? fallbackTranscriptionConfiguration()
+        resolvedTranscriptionConfiguration() ?? fallbackTranscriptionConfiguration()
     }
 
-    var rewriteConfiguration: TextGenerationProviderConfiguration {
-        resolvedRewriteConfiguration() ?? fallbackRewriteConfiguration()
-    }
-
-    var cliRewriteConfiguration: TextGenerationProviderConfiguration {
-        resolvedCLIRewriteConfiguration() ?? fallbackCLIRewriteConfiguration()
+    var textProcessingConfiguration: TextGenerationProviderConfiguration {
+        resolvedTextProcessingConfiguration() ?? fallbackTextProcessingConfiguration()
     }
 
     var transcriptionConfiguration: SpeechProviderConfiguration? {
         resolvedTranscriptionConfiguration()
     }
 
-    var resolvedFeishuCLIExecutablePathOverride: String? {
-        let normalized = Self.sanitizeCLIExecutablePathOverride(feishuCLIExecutablePathOverride)
-        return normalized.isEmpty ? nil : normalized
-    }
-
     var credentialState: CredentialState {
         asrCredentialState
-    }
-
-    private let defaults: UserDefaults
-    private let credentialStore: ProviderCredentialStore
-    private let defaultsASRConfigKey = "providers.asr.config.v2"
-    private let defaultsTextConfigKey = "providers.text.config.v2"
-    private let defaultsCLITextConfigKey = "providers.text.cli.config.v1"
-    private let defaultsFeishuCLIExecutablePathOverrideKey = "providers.feishu.cli.path.override.v1"
-    private let defaultsLatestASRTestResultKey = "providers.asr.test.result.v1"
-    private let defaultsLatestTextTestResultKey = "providers.text.test.result.v1"
-    private let defaultsLatestCLITextTestResultKey = "providers.text.cli.test.result.v1"
-
-    init(
-        defaults: UserDefaults = .standard,
-        credentialStore: ProviderCredentialStore
-    ) {
-        self.defaults = defaults
-        self.credentialStore = credentialStore
-
-        let decodedASRConfig = Self.decodeASRConfig(
-            from: defaults.data(forKey: defaultsASRConfigKey)
-        )
-        let decodedTextConfig = Self.decodeTextConfig(
-            from: defaults.data(forKey: defaultsTextConfigKey)
-        )
-        let decodedCLITextConfig = Self.decodeTextConfig(
-            from: defaults.data(forKey: defaultsCLITextConfigKey)
-        )
-
-        let legacyMigration = Self.migrateLegacyConfiguration(defaults: defaults)
-
-        let initialASRConfig = decodedASRConfig ?? legacyMigration.asrConfig
-        let initialTextConfig = decodedTextConfig ?? legacyMigration.textConfig
-        let initialCLITextConfig = decodedCLITextConfig ?? Self.defaultCLITextConfig()
-        let sanitizedASRConfig = Self.sanitizeASRConfig(initialASRConfig)
-        let sanitizedTextConfig = Self.sanitizeTextConfig(initialTextConfig)
-        let sanitizedCLITextConfig = Self.sanitizeCLITextConfig(initialCLITextConfig)
-
-        self.asrConfig = sanitizedASRConfig
-        self.textConfig = sanitizedTextConfig
-        self.cliTextConfig = sanitizedCLITextConfig
-        self.feishuCLIExecutablePathOverride = Self.sanitizeCLIExecutablePathOverride(
-            defaults.string(forKey: defaultsFeishuCLIExecutablePathOverrideKey) ?? ""
-        )
-        self.latestASRTestResult = Self.decodeConnectionTestResult(
-            from: defaults.data(forKey: defaultsLatestASRTestResultKey)
-        )
-        self.latestTextTestResult = Self.decodeConnectionTestResult(
-            from: defaults.data(forKey: defaultsLatestTextTestResultKey)
-        )
-        self.latestCLITextTestResult = Self.decodeConnectionTestResult(
-            from: defaults.data(forKey: defaultsLatestCLITextTestResultKey)
-        )
-
-        persistASRConfig()
-        persistTextConfig()
-        persistCLITextConfig()
-        persistFeishuCLIExecutablePathOverride()
-        migrateLegacyCredentialsIfNeeded(using: legacyMigration)
-        refreshCredentialState(allowUserInteraction: false)
-
-        if initialASRConfig != sanitizedASRConfig {
-            clearASRTestResult()
-        }
-        if initialTextConfig != sanitizedTextConfig {
-            clearTextTestResult()
-        }
-        if initialCLITextConfig != sanitizedCLITextConfig {
-            clearCLITextTestResult()
-        }
     }
 
     func refreshCredentialState(allowUserInteraction: Bool = false) {
@@ -236,64 +149,11 @@ final class ProviderSettingsStore: ObservableObject {
         }
         textCredentialState = resolveCredentialState(
             keyRef: textConfig.keyRef,
-            roleName: "文本模型",
+            roleName: "DeepSeek 文本处理",
             allowUserInteraction: allowUserInteraction
         ) { [weak self] message in
             self?.textFeedbackMessage = message
         }
-
-        let cliPrimaryState = resolveCredentialState(
-            keyRef: cliTextConfig.keyRef,
-            roleName: "CLI 模式文本模型",
-            allowUserInteraction: allowUserInteraction
-        ) { [weak self] message in
-            self?.cliTextFeedbackMessage = message
-        }
-        if cliPrimaryState == .missing, cliTextConfig.keyRef != textConfig.keyRef {
-            let fallbackState = resolveCredentialState(
-                keyRef: textConfig.keyRef,
-                roleName: "文本模型",
-                allowUserInteraction: allowUserInteraction
-            ) { _ in }
-            switch fallbackState {
-            case .saved:
-                cliTextCredentialState = .saved
-                cliTextFeedbackMessage = nil
-            case .inaccessible:
-                cliTextCredentialState = .inaccessible
-                cliTextFeedbackMessage = "CLI 模式密钥暂不可读。可先单独保存一份 CLI 密钥再重试。"
-            case let .failed(status):
-                cliTextCredentialState = .failed(status)
-                cliTextFeedbackMessage = "CLI 模式密钥读取失败。可先单独保存一份 CLI 密钥再重试。"
-            case .missing, .unknown, .saving:
-                cliTextCredentialState = .missing
-                cliTextFeedbackMessage = nil
-            }
-        } else {
-            cliTextCredentialState = cliPrimaryState
-        }
-    }
-
-    @discardableResult
-    func saveCLITextAPIKeyDraft() -> Bool {
-        saveAPIKey(
-            draft: cliTextAPIKeyDraft,
-            keyRef: cliTextConfig.keyRef,
-            roleName: "CLI 模式文本模型",
-            onSaving: { [weak self] in
-                self?.cliTextCredentialState = .saving
-            },
-            onSuccess: { [weak self] in
-                self?.cliTextAPIKeyDraft = ""
-                self?.cliTextCredentialState = .saved
-                self?.cliTextFeedbackMessage = "CLI 模式 API 密钥已保存。"
-                self?.clearCLITextTestResult()
-            },
-            onFailure: { [weak self] state, message in
-                self?.cliTextCredentialState = state
-                self?.cliTextFeedbackMessage = message
-            }
-        )
     }
 
     @discardableResult
@@ -302,9 +162,7 @@ final class ProviderSettingsStore: ObservableObject {
             draft: asrAPIKeyDraft,
             keyRef: asrConfig.keyRef,
             roleName: "语音识别",
-            onSaving: { [weak self] in
-                self?.asrCredentialState = .saving
-            },
+            onSaving: { [weak self] in self?.asrCredentialState = .saving },
             onSuccess: { [weak self] in
                 self?.asrAPIKeyDraft = ""
                 self?.asrCredentialState = .saved
@@ -323,14 +181,12 @@ final class ProviderSettingsStore: ObservableObject {
         saveAPIKey(
             draft: textAPIKeyDraft,
             keyRef: textConfig.keyRef,
-            roleName: "文本模型",
-            onSaving: { [weak self] in
-                self?.textCredentialState = .saving
-            },
+            roleName: "DeepSeek 文本处理",
+            onSaving: { [weak self] in self?.textCredentialState = .saving },
             onSuccess: { [weak self] in
                 self?.textAPIKeyDraft = ""
                 self?.textCredentialState = .saved
-                self?.textFeedbackMessage = "文本模型 API 密钥已保存。"
+                self?.textFeedbackMessage = "DeepSeek API 密钥已保存。"
                 self?.clearTextTestResult()
             },
             onFailure: { [weak self] state, message in
@@ -350,9 +206,7 @@ final class ProviderSettingsStore: ObservableObject {
                 self?.asrFeedbackMessage = "语音识别 API 密钥已删除。"
                 self?.clearASRTestResult()
             },
-            onFailure: { [weak self] message in
-                self?.asrFeedbackMessage = message
-            }
+            onFailure: { [weak self] message in self?.asrFeedbackMessage = message }
         )
     }
 
@@ -360,31 +214,13 @@ final class ProviderSettingsStore: ObservableObject {
     func clearTextAPIKey() -> Bool {
         clearAPIKey(
             keyRef: textConfig.keyRef,
-            roleName: "文本模型",
+            roleName: "DeepSeek 文本处理",
             onSuccess: { [weak self] in
                 self?.textCredentialState = .missing
-                self?.textFeedbackMessage = "文本模型 API 密钥已删除。"
+                self?.textFeedbackMessage = "DeepSeek API 密钥已删除。"
                 self?.clearTextTestResult()
             },
-            onFailure: { [weak self] message in
-                self?.textFeedbackMessage = message
-            }
-        )
-    }
-
-    @discardableResult
-    func clearCLITextAPIKey() -> Bool {
-        clearAPIKey(
-            keyRef: cliTextConfig.keyRef,
-            roleName: "CLI 模式文本模型",
-            onSuccess: { [weak self] in
-                self?.cliTextCredentialState = .missing
-                self?.cliTextFeedbackMessage = "CLI 模式 API 密钥已删除。"
-                self?.clearCLITextTestResult()
-            },
-            onFailure: { [weak self] message in
-                self?.cliTextFeedbackMessage = message
-            }
+            onFailure: { [weak self] message in self?.textFeedbackMessage = message }
         )
     }
 
@@ -392,46 +228,12 @@ final class ProviderSettingsStore: ObservableObject {
         try credentialStore.loadAPIKey(for: asrConfig.keyRef)
     }
 
-    func loadAPIKeyForRewriteProvider() throws -> String? {
+    func loadAPIKeyForTextProcessing() throws -> String? {
         try credentialStore.loadAPIKey(for: textConfig.keyRef)
     }
 
-    func loadAPIKeyForCLIProvider() throws -> String? {
-        var primaryError: Error?
-        do {
-            if
-                let primary = try credentialStore.loadAPIKey(for: cliTextConfig.keyRef)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                !primary.isEmpty
-            {
-                return primary
-            }
-        } catch {
-            primaryError = error
-        }
-
-        do {
-            if
-                let fallback = try credentialStore.loadAPIKey(for: textConfig.keyRef)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                !fallback.isEmpty
-            {
-                return fallback
-            }
-        } catch {
-            if primaryError == nil {
-                throw error
-            }
-        }
-
-        if let primaryError {
-            throw primaryError
-        }
-        return nil
-    }
-
     func loadAPIKeyForActiveProvider() throws -> String? {
-        try credentialStore.loadAPIKey(for: asrConfig.keyRef)
+        try loadAPIKeyForTranscriptionProvider()
     }
 
     func updateASRProviderType(_ type: ProviderType) {
@@ -442,17 +244,15 @@ final class ProviderSettingsStore: ObservableObject {
         updated.providerType = type
         if !type.allowsCustomBaseURL {
             updated.baseURLString = type.recommendedBaseURLString
+        } else if updated.baseURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            updated.baseURLString = type.recommendedBaseURLString
         }
         updated.modelName = type.defaultTranscriptionModelName
-        if type == .localSenseVoice {
-            let currentPath = updated.localModelPath?.trimmingCharacters(in: .whitespacesAndNewlines)
-            updated.localModelPath = (currentPath?.isEmpty == false) ? currentPath : defaultSenseVoiceModelPath
-        }
         asrConfig = updated
     }
 
     func updateTextProviderType(_ type: ProviderType) {
-        guard type.supportsRewrite else {
+        guard type.supportsTextProcessing else {
             return
         }
         var updated = textConfig
@@ -467,28 +267,8 @@ final class ProviderSettingsStore: ObservableObject {
         ) {
             updated.baseURLString = type.recommendedBaseURLString
         }
-        updated.modelName = type.defaultRewriteModelName
+        updated.modelName = type.defaultTextProcessingModelName
         textConfig = updated
-    }
-
-    func updateCLITextProviderType(_ type: ProviderType) {
-        guard type.supportsRewrite else {
-            return
-        }
-        var updated = cliTextConfig
-        let previousProviderType = updated.providerType
-        let previousBaseURLString = updated.baseURLString
-        updated.providerType = type
-        if !type.allowsCustomBaseURL {
-            updated.baseURLString = type.recommendedBaseURLString
-        } else if Self.shouldResetCompatibleBaseURL(
-            previousProviderType: previousProviderType,
-            previousBaseURLString: previousBaseURLString
-        ) {
-            updated.baseURLString = type.recommendedBaseURLString
-        }
-        updated.modelName = type.defaultRewriteModelName
-        cliTextConfig = updated
     }
 
     func updateASRBaseURL(_ value: String) {
@@ -499,33 +279,12 @@ final class ProviderSettingsStore: ObservableObject {
         textConfig.baseURLString = value
     }
 
-    func updateCLITextBaseURL(_ value: String) {
-        cliTextConfig.baseURLString = value
-    }
-
     func updateASRModel(_ value: String) {
         asrConfig.modelName = value
     }
 
-    func updateASRLocalModelPath(_ value: String) {
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        asrConfig.localModelPath = normalized.isEmpty ? nil : normalized
-    }
-
     func updateTextModel(_ value: String) {
         textConfig.modelName = value
-    }
-
-    func updateCLITextModel(_ value: String) {
-        cliTextConfig.modelName = value
-    }
-
-    func updateFeishuCLIExecutablePathOverride(_ value: String) {
-        feishuCLIExecutablePathOverride = Self.sanitizeCLIExecutablePathOverride(value)
-    }
-
-    func clearFeishuCLIExecutablePathOverride() {
-        feishuCLIExecutablePathOverride = ""
     }
 
     func testASRConnection() async -> ConnectionTestResult {
@@ -542,17 +301,6 @@ final class ProviderSettingsStore: ObservableObject {
         return result
     }
 
-    func testCLITextConnection() async -> ConnectionTestResult {
-        let tester = TextConnectionTester(credentialStore: credentialStore)
-        var configForTest = cliTextConfig
-        if !hasNonEmptyCredential(for: cliTextConfig.keyRef) {
-            configForTest.keyRef = textConfig.keyRef
-        }
-        let result = await tester.test(config: configForTest)
-        recordCLITextTestResult(result)
-        return result
-    }
-
     func recordASRTestResult(_ result: ConnectionTestResult) {
         latestASRTestResult = result
         persistLatestASRTestResult()
@@ -563,71 +311,40 @@ final class ProviderSettingsStore: ObservableObject {
         persistLatestTextTestResult()
     }
 
-    func recordCLITextTestResult(_ result: ConnectionTestResult) {
-        latestCLITextTestResult = result
-        persistLatestCLITextTestResult()
-    }
-
     private func resolvedTranscriptionConfiguration() -> SpeechProviderConfiguration? {
         guard asrConfigurationValidationMessage == nil else {
             return nil
         }
-
         guard let baseURL = ProviderConfigurationValidator.resolvedBaseURL(
             providerType: asrConfig.providerType,
             baseURLString: asrConfig.baseURLString
         ) else {
             return nil
         }
-
         return SpeechProviderConfiguration(
             profileID: asrConfig.keyRef,
             providerType: asrConfig.providerType,
             providerName: asrConfig.providerType.displayName,
             modelName: modelName,
-            baseURL: baseURL,
-            localModelPath: asrConfig.localModelPath
+            baseURL: baseURL
         )
     }
 
-    private func resolvedRewriteConfiguration() -> TextGenerationProviderConfiguration? {
+    private func resolvedTextProcessingConfiguration() -> TextGenerationProviderConfiguration? {
         guard textConfigurationValidationMessage == nil else {
             return nil
         }
-
         guard let baseURL = ProviderConfigurationValidator.resolvedBaseURL(
             providerType: textConfig.providerType,
             baseURLString: textConfig.baseURLString
         ) else {
             return nil
         }
-
         return TextGenerationProviderConfiguration(
             profileID: textConfig.keyRef,
             providerType: textConfig.providerType,
             providerName: textConfig.providerType.displayName,
-            modelName: rewriteModelName,
-            baseURL: baseURL
-        )
-    }
-
-    private func resolvedCLIRewriteConfiguration() -> TextGenerationProviderConfiguration? {
-        guard cliTextConfigurationValidationMessage == nil else {
-            return nil
-        }
-
-        guard let baseURL = ProviderConfigurationValidator.resolvedBaseURL(
-            providerType: cliTextConfig.providerType,
-            baseURLString: cliTextConfig.baseURLString
-        ) else {
-            return nil
-        }
-
-        return TextGenerationProviderConfiguration(
-            profileID: cliTextConfig.keyRef,
-            providerType: cliTextConfig.providerType,
-            providerName: cliTextConfig.providerType.displayName,
-            modelName: cliRewriteModelName,
+            modelName: textProcessingModelName,
             baseURL: baseURL
         )
     }
@@ -638,28 +355,17 @@ final class ProviderSettingsStore: ObservableObject {
             providerType: asrConfig.providerType,
             providerName: asrConfig.providerType.displayName,
             modelName: asrConfig.providerType.defaultTranscriptionModelName,
-            baseURL: asrConfig.providerType.fixedBaseURL ?? URL(string: "https://api.openai.com")!,
-            localModelPath: asrConfig.localModelPath
+            baseURL: asrConfig.providerType.fixedBaseURL ?? URL(string: "https://api.openai.com")!
         )
     }
 
-    private func fallbackRewriteConfiguration() -> TextGenerationProviderConfiguration {
+    private func fallbackTextProcessingConfiguration() -> TextGenerationProviderConfiguration {
         TextGenerationProviderConfiguration(
             profileID: textConfig.keyRef,
             providerType: textConfig.providerType,
             providerName: textConfig.providerType.displayName,
-            modelName: textConfig.providerType.defaultRewriteModelName,
+            modelName: textConfig.providerType.defaultTextProcessingModelName,
             baseURL: URL(string: textConfig.providerType.recommendedBaseURLString) ?? URL(string: "https://api.deepseek.com")!
-        )
-    }
-
-    private func fallbackCLIRewriteConfiguration() -> TextGenerationProviderConfiguration {
-        TextGenerationProviderConfiguration(
-            profileID: cliTextConfig.keyRef,
-            providerType: cliTextConfig.providerType,
-            providerName: cliTextConfig.providerType.displayName,
-            modelName: cliTextConfig.providerType.defaultRewriteModelName,
-            baseURL: URL(string: cliTextConfig.providerType.recommendedBaseURLString) ?? URL(string: "https://api.deepseek.com")!
         )
     }
 
@@ -675,27 +381,11 @@ final class ProviderSettingsStore: ObservableObject {
         }
     }
 
-    private func persistCLITextConfig() {
-        if let data = try? JSONEncoder().encode(cliTextConfig) {
-            defaults.set(data, forKey: defaultsCLITextConfigKey)
-        }
-    }
-
-    private func persistFeishuCLIExecutablePathOverride() {
-        let normalized = Self.sanitizeCLIExecutablePathOverride(feishuCLIExecutablePathOverride)
-        if normalized.isEmpty {
-            defaults.removeObject(forKey: defaultsFeishuCLIExecutablePathOverrideKey)
-            return
-        }
-        defaults.set(normalized, forKey: defaultsFeishuCLIExecutablePathOverrideKey)
-    }
-
     private func persistLatestASRTestResult() {
         guard let latestASRTestResult else {
             defaults.removeObject(forKey: defaultsLatestASRTestResultKey)
             return
         }
-
         if let data = try? JSONEncoder().encode(latestASRTestResult) {
             defaults.set(data, forKey: defaultsLatestASRTestResultKey)
         }
@@ -706,20 +396,8 @@ final class ProviderSettingsStore: ObservableObject {
             defaults.removeObject(forKey: defaultsLatestTextTestResultKey)
             return
         }
-
         if let data = try? JSONEncoder().encode(latestTextTestResult) {
             defaults.set(data, forKey: defaultsLatestTextTestResultKey)
-        }
-    }
-
-    private func persistLatestCLITextTestResult() {
-        guard let latestCLITextTestResult else {
-            defaults.removeObject(forKey: defaultsLatestCLITextTestResultKey)
-            return
-        }
-
-        if let data = try? JSONEncoder().encode(latestCLITextTestResult) {
-            defaults.set(data, forKey: defaultsLatestCLITextTestResultKey)
         }
     }
 
@@ -737,14 +415,6 @@ final class ProviderSettingsStore: ObservableObject {
         }
         latestTextTestResult = nil
         persistLatestTextTestResult()
-    }
-
-    private func clearCLITextTestResult() {
-        guard latestCLITextTestResult != nil else {
-            return
-        }
-        latestCLITextTestResult = nil
-        persistLatestCLITextTestResult()
     }
 
     private func saveAPIKey(
@@ -830,99 +500,69 @@ final class ProviderSettingsStore: ObservableObject {
                 onFeedback("读取\(roleName) API 密钥失败（OSStatus \(status)）。")
                 return .failed(status)
             case .invalidCredentialEncoding:
-                onFeedback("\(roleName) API 密钥无法解析，请删除后重新保存。")
+                onFeedback("已保存的\(roleName) API 密钥无法解析，请删除后重新保存。")
                 return .failed(nil)
             }
         } catch {
-            onFeedback("无法读取\(roleName) API 密钥。")
+            onFeedback("读取\(roleName) API 密钥失败：\(error.localizedDescription)")
             return .failed(nil)
         }
     }
 
-    private func hasNonEmptyCredential(for keyRef: String) -> Bool {
-        let loaded = (try? credentialStore.loadAPIKey(for: keyRef)) ?? nil
-        let normalized = loaded?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !normalized.isEmpty
+    private static func decodeASRConfig(from data: Data?) -> ASRConfig? {
+        guard let data else {
+            return nil
+        }
+        return try? JSONDecoder().decode(ASRConfig.self, from: data)
     }
 
-    private func migrateLegacyCredentialsIfNeeded(using migration: LegacyMigration) {
-        migrateLegacyCredential(
-            oldRef: migration.legacyASRKeyRef,
-            newRef: asrConfig.keyRef
-        )
-        migrateLegacyCredential(
-            oldRef: migration.legacyTextKeyRef,
-            newRef: textConfig.keyRef
-        )
+    private static func decodeTextConfig(from data: Data?) -> TextConfig? {
+        guard let data else {
+            return nil
+        }
+        return try? JSONDecoder().decode(TextConfig.self, from: data)
     }
 
-    private func migrateLegacyCredential(oldRef: String?, newRef: String) {
-        guard let oldRef, !oldRef.isEmpty, oldRef != newRef else {
-            return
+    private static func decodeConnectionTestResult(from data: Data?) -> ConnectionTestResult? {
+        guard let data else {
+            return nil
         }
-
-        if
-            let existing = try? credentialStore.loadAPIKey(for: newRef),
-            !existing.isEmpty
-        {
-            return
-        }
-
-        guard
-            let legacy = try? credentialStore.loadAPIKey(for: oldRef),
-            !legacy.isEmpty
-        else {
-            return
-        }
-
-        try? credentialStore.saveAPIKey(legacy, for: newRef)
+        return try? JSONDecoder().decode(ConnectionTestResult.self, from: data)
     }
 
     private static func sanitizeASRConfig(_ config: ASRConfig) -> ASRConfig {
         var sanitized = config
+        if !sanitized.providerType.supportsTranscription {
+            sanitized.providerType = .dashScopeQwenASR
+        }
+        sanitized.modelName = sanitized.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if sanitized.modelName.isEmpty {
+            sanitized.modelName = sanitized.providerType.defaultTranscriptionModelName
+        }
         if !sanitized.providerType.allowsCustomBaseURL {
             sanitized.baseURLString = sanitized.providerType.recommendedBaseURLString
-        }
-        if sanitized.modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            sanitized.modelName = sanitized.providerType.defaultTranscriptionModelName
+        } else if sanitized.baseURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sanitized.baseURLString = sanitized.providerType.recommendedBaseURLString
         }
         if sanitized.keyRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             sanitized.keyRef = defaultASRCredentialKeyRef
-        }
-        let normalizedModelPath = sanitized.localModelPath?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if sanitized.providerType == .localSenseVoice {
-            sanitized.localModelPath = (normalizedModelPath?.isEmpty == false)
-                ? normalizedModelPath
-                : defaultSenseVoiceModelPath
-        } else if normalizedModelPath?.isEmpty == true {
-            sanitized.localModelPath = nil
-        } else {
-            sanitized.localModelPath = normalizedModelPath
         }
         return sanitized
     }
 
     private static func sanitizeTextConfig(_ config: TextConfig) -> TextConfig {
         var sanitized = config
-        sanitized.modelName = migratedDeepSeekRewriteModelName(
-            providerType: sanitized.providerType,
-            baseURLString: sanitized.baseURLString,
-            modelName: sanitized.modelName
-        )
+        if !sanitized.providerType.supportsTextProcessing {
+            sanitized.providerType = .openAICompatible
+        }
+        sanitized.modelName = sanitized.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if sanitized.modelName.isEmpty {
+            sanitized.modelName = sanitized.providerType.defaultTextProcessingModelName
+        }
         if !sanitized.providerType.allowsCustomBaseURL {
             sanitized.baseURLString = sanitized.providerType.recommendedBaseURLString
-        } else {
-            let normalizedBaseURL = normalizedBaseURLString(sanitized.baseURLString)
-            if normalizedBaseURL.isEmpty || shouldRepairCompatibleDeepSeekEndpoint(for: sanitized) {
-                sanitized.baseURLString = sanitized.providerType.recommendedBaseURLString
-            } else {
-                sanitized.baseURLString = normalizedBaseURL
-            }
-        }
-        if sanitized.modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            sanitized.modelName = sanitized.providerType.defaultRewriteModelName
+        } else if sanitized.baseURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sanitized.baseURLString = sanitized.providerType.recommendedBaseURLString
         }
         if sanitized.keyRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             sanitized.keyRef = defaultTextCredentialKeyRef
@@ -930,264 +570,14 @@ final class ProviderSettingsStore: ObservableObject {
         return sanitized
     }
 
-    private static func sanitizeCLITextConfig(_ config: TextConfig) -> TextConfig {
-        var sanitized = sanitizeTextConfig(config)
-        if sanitized.keyRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            sanitized.keyRef = defaultCLITextCredentialKeyRef
-        }
-        return sanitized
-    }
-
-    private static func normalizedBaseURLString(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return ""
-        }
-        return trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
-    }
-
     private static func shouldResetCompatibleBaseURL(
         previousProviderType: ProviderType,
         previousBaseURLString: String
     ) -> Bool {
-        guard previousProviderType != .openAICompatible else {
-            return normalizedBaseURLString(previousBaseURLString).isEmpty
+        if previousProviderType != .openAICompatible {
+            return true
         }
-
-        let previousFixedBaseURL = normalizedBaseURLString(
-            previousProviderType.recommendedBaseURLString
-        )
-        let currentBaseURL = normalizedBaseURLString(previousBaseURLString)
-        return currentBaseURL.isEmpty || currentBaseURL == previousFixedBaseURL
-    }
-
-    private static func shouldRepairCompatibleDeepSeekEndpoint(for config: TextConfig) -> Bool {
-        guard config.providerType == .openAICompatible else {
-            return false
-        }
-
-        let normalizedBaseURL = normalizedBaseURLString(config.baseURLString)
-        let openAIBaseURL = normalizedBaseURLString(ProviderType.openAI.recommendedBaseURLString)
-        guard normalizedBaseURL == openAIBaseURL else {
-            return false
-        }
-
-        let normalizedModel = config.modelName
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        return normalizedModel.hasPrefix("deepseek")
-    }
-
-    private static func migratedDeepSeekRewriteModelName(
-        providerType: ProviderType,
-        baseURLString: String,
-        modelName: String
-    ) -> String {
-        let normalizedModel = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedModel.isEmpty else {
-            return modelName
-        }
-
-        let lowercasedModel = normalizedModel.lowercased()
-        guard lowercasedModel == "deepseek-chat" else {
-            return normalizedModel
-        }
-
-        guard providerType == .openAICompatible else {
-            return normalizedModel
-        }
-
-        return "deepseek-v4-flash"
-    }
-
-    private static func sanitizeCLIExecutablePathOverride(_ value: String) -> String {
-        value.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func decodeASRConfig(from data: Data?) -> ASRConfig? {
-        guard
-            let data,
-            let decoded = try? JSONDecoder().decode(ASRConfig.self, from: data)
-        else {
-            return nil
-        }
-        return decoded
-    }
-
-    private static func decodeTextConfig(from data: Data?) -> TextConfig? {
-        guard
-            let data,
-            let decoded = try? JSONDecoder().decode(TextConfig.self, from: data)
-        else {
-            return nil
-        }
-        return decoded
-    }
-
-    private static func decodeConnectionTestResult(from data: Data?) -> ConnectionTestResult? {
-        guard
-            let data,
-            let decoded = try? JSONDecoder().decode(ConnectionTestResult.self, from: data)
-        else {
-            return nil
-        }
-        return decoded
-    }
-
-    private static func defaultASRConfig() -> ASRConfig {
-        ASRConfig(
-            providerType: .dashScopeQwenASR,
-            baseURLString: "https://dashscope.aliyuncs.com",
-            modelName: ProviderType.dashScopeQwenASR.defaultTranscriptionModelName,
-            keyRef: defaultASRCredentialKeyRef
-        )
-    }
-
-    private static func defaultTextConfig() -> TextConfig {
-        TextConfig(
-            providerType: .openAICompatible,
-            baseURLString: ProviderType.openAICompatible.recommendedBaseURLString,
-            modelName: ProviderType.openAICompatible.defaultRewriteModelName,
-            keyRef: defaultTextCredentialKeyRef
-        )
-    }
-
-    private static func defaultCLITextConfig() -> TextConfig {
-        TextConfig(
-            providerType: .openAICompatible,
-            baseURLString: ProviderType.openAICompatible.recommendedBaseURLString,
-            modelName: ProviderType.openAICompatible.defaultRewriteModelName,
-            keyRef: defaultCLITextCredentialKeyRef
-        )
-    }
-
-    private struct LegacyProviderProfile: Codable {
-        let id: String
-        let type: ProviderType
-        let isEnabled: Bool
-        let baseURLString: String
-        let transcriptionModelName: String
-        let rewriteModelName: String
-    }
-
-    private struct LegacyMigration {
-        let asrConfig: ASRConfig
-        let textConfig: TextConfig
-        let legacyASRKeyRef: String?
-        let legacyTextKeyRef: String?
-    }
-
-    private static func migrateLegacyConfiguration(defaults: UserDefaults) -> LegacyMigration {
-        let fallbackASR = defaultASRConfig()
-        let fallbackText = defaultTextConfig()
-        guard
-            let data = defaults.data(forKey: "providers.profiles.v1"),
-            let profiles = try? JSONDecoder().decode([LegacyProviderProfile].self, from: data),
-            !profiles.isEmpty
-        else {
-            let asrModel = defaults.string(forKey: "speech.provider.model")?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let textModel = defaults.string(forKey: "rewrite.provider.model")?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let asr = ASRConfig(
-                providerType: fallbackASR.providerType,
-                baseURLString: fallbackASR.baseURLString,
-                modelName: (asrModel?.isEmpty == false) ? asrModel : fallbackASR.modelName,
-                keyRef: defaultASRCredentialKeyRef
-            )
-            let text = TextConfig(
-                providerType: fallbackText.providerType,
-                baseURLString: fallbackText.baseURLString,
-                modelName: (textModel?.isEmpty == false) ? textModel : fallbackText.modelName,
-                keyRef: defaultTextCredentialKeyRef
-            )
-            return LegacyMigration(
-                asrConfig: asr,
-                textConfig: text,
-                legacyASRKeyRef: nil,
-                legacyTextKeyRef: nil
-            )
-        }
-
-        let enabledProfiles = profiles.filter(\.isEnabled)
-        let pool = enabledProfiles.isEmpty ? profiles : enabledProfiles
-
-        let selectedASRID = defaults.string(forKey: "providers.transcription.profile.id")
-        let selectedTextID = defaults.string(forKey: "providers.rewrite.profile.id")
-
-        let asrProfile = pool.first(where: { $0.id == selectedASRID }) ?? pool[0]
-        let textProfile = pool.first(where: { $0.id == selectedTextID }) ?? asrProfile
-
-        let asrBaseURL = asrProfile.type.fixedBaseURL?.absoluteString ?? asrProfile.baseURLString
-        let textBaseURL = textProfile.type.fixedBaseURL?.absoluteString ?? textProfile.baseURLString
-
-        let asr = ASRConfig(
-            providerType: asrProfile.type,
-            baseURLString: asrBaseURL,
-            modelName: asrProfile.transcriptionModelName,
-            keyRef: defaultASRCredentialKeyRef
-        )
-        let text = TextConfig(
-            providerType: textProfile.type,
-            baseURLString: textBaseURL,
-            modelName: textProfile.rewriteModelName,
-            keyRef: defaultTextCredentialKeyRef
-        )
-
-        return LegacyMigration(
-            asrConfig: asr,
-            textConfig: text,
-            legacyASRKeyRef: asrProfile.id,
-            legacyTextKeyRef: textProfile.id
-        )
-    }
-}
-
-protocol SpeechProvider {
-    var providerName: String { get }
-}
-
-struct PlaceholderSpeechProvider: SpeechProvider {
-    let providerName: String = "用户自填云端服务商 Key"
-}
-
-enum ConnectionTestStatus: String, Equatable, Codable {
-    case success
-    case failure
-}
-
-struct ConnectionTestResult: Equatable, Codable {
-    let status: ConnectionTestStatus
-    let message: String
-    let hint: String
-    let timestamp: Date
-    let httpStatus: Int?
-
-    static func success(
-        message: String,
-        hint: String = "配置可用。",
-        httpStatus: Int? = 200
-    ) -> ConnectionTestResult {
-        ConnectionTestResult(
-            status: .success,
-            message: message,
-            hint: hint,
-            timestamp: Date(),
-            httpStatus: httpStatus
-        )
-    }
-
-    static func failure(
-        message: String,
-        hint: String,
-        httpStatus: Int? = nil
-    ) -> ConnectionTestResult {
-        ConnectionTestResult(
-            status: .failure,
-            message: message,
-            hint: hint,
-            timestamp: Date(),
-            httpStatus: httpStatus
-        )
+        let normalized = previousBaseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty || normalized == ProviderType.openAI.recommendedBaseURLString
     }
 }
