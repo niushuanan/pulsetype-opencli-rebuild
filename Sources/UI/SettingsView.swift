@@ -262,7 +262,7 @@ struct SettingsView: View {
 
             HStack {
                 Spacer()
-                Text("长按触发，松开后执行 Music 指令")
+                Text("长按触发，松开后执行 Music 指令；可与开始/结束说话共用同一键位（轻点/长按自动区分）。")
                     .font(PulseUI.Typography.caption)
                     .pulseSecondaryText()
             }

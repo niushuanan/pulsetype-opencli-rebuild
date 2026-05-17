@@ -35,6 +35,18 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(store.textConfig.modelName, "claude-3-5-sonnet-latest")
     }
 
+    func testHotkeyStoreAllowsWakeAndAgentUsingSameModifier() {
+        let defaults = makeDefaults()
+        let store = HotkeyStateStore(defaults: defaults)
+
+        _ = store.setTriggerMode(.modifierTap, for: .wakeSession)
+        _ = store.setModifier(.rightShift, for: .wakeSession)
+        _ = store.setAgentModifier(.rightShift)
+
+        XCTAssertFalse(store.hasConflict)
+        XCTAssertNil(store.conflictMessage)
+    }
+
     func testHistoryStoreKeepsSupportedModesFromOldFiles() throws {
         let directory = makeTemporaryDirectory()
         let file = directory.appendingPathComponent("session-history-v2.json")

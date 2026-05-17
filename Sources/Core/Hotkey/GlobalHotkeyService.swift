@@ -234,13 +234,22 @@ final class GlobalHotkeyService {
 
     private func handleFlagsChanged(_ event: NSEvent) {
         if hotkeyStateStore.wakeTriggerMode == .modifierTap {
-            processWakeModifierEvent(event)
+            if isWakeAndAgentSharingModifier {
+                processSharedWakeModifierEvent(event)
+            } else {
+                processWakeModifierEvent(event)
+            }
         } else {
             clearWakeHoldCheck()
             wakePressStateMachine.reset()
             wakeHoldSessionActive = false
         }
         processAgentModifierEvent(event)
+    }
+
+    private var isWakeAndAgentSharingModifier: Bool {
+        hotkeyStateStore.wakeTriggerMode == .modifierTap
+            && hotkeyStateStore.wakeModifier == hotkeyStateStore.agentModifier
     }
 
     private func processWakeModifierEvent(_ event: NSEvent) {
@@ -304,6 +313,75 @@ final class GlobalHotkeyService {
 
         if !activeFlags.contains(modifier.modifierFlags) {
             clearWakeHoldCheck()
+            wakePressStateMachine.reset()
+            wakeHoldSessionActive = false
+        }
+    }
+
+    private func processSharedWakeModifierEvent(_ event: NSEvent) {
+        let modifier = hotkeyStateStore.wakeModifier
+        let trackedFlags: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+        let activeFlags = event.modifierFlags.intersection(trackedFlags)
+        let isTargetKeyEvent = event.keyCode == modifier.keyCode
+        let isFamilyPressed = activeFlags.contains(modifier.modifierFlags)
+        let hasOtherModifierFamilies = !activeFlags.subtracting(modifier.modifierFlags).isEmpty
+
+        clearWakeHoldCheck()
+
+        if !isTargetKeyEvent, event.keyCode == 0 {
+            let now = Date()
+            if isFamilyPressed, !wakePressStateMachine.isPressed {
+                wakePressStateMachine.beginPress(
+                    at: now,
+                    hasForeignInput: hasOtherModifierFamilies
+                )
+                return
+            }
+            if !isFamilyPressed, wakePressStateMachine.isPressed {
+                var action = wakePressStateMachine.endPress(
+                    at: now,
+                    hasOtherModifierFamilies: hasOtherModifierFamilies,
+                    sameFamilyStillPressed: isFamilyPressed
+                )
+                if case .tap = action, (agentPressStateMachine.holdTriggered || agentHoldSessionActive) {
+                    action = .none
+                }
+                handleWakePressAction(action)
+                return
+            }
+        }
+
+        if isTargetKeyEvent {
+            let now = Date()
+            if !wakePressStateMachine.isPressed {
+                wakePressStateMachine.beginPress(
+                    at: now,
+                    hasForeignInput: hasOtherModifierFamilies
+                )
+                return
+            }
+
+            var action = wakePressStateMachine.endPress(
+                at: now,
+                hasOtherModifierFamilies: hasOtherModifierFamilies,
+                sameFamilyStillPressed: isFamilyPressed
+            )
+            if case .tap = action, (agentPressStateMachine.holdTriggered || agentHoldSessionActive) {
+                action = .none
+            }
+            handleWakePressAction(action)
+            return
+        }
+
+        guard wakePressStateMachine.isPressed else {
+            return
+        }
+
+        if HotkeyModifier.from(keyCode: event.keyCode) != nil {
+            wakePressStateMachine.registerForeignInput()
+        }
+
+        if !activeFlags.contains(modifier.modifierFlags) {
             wakePressStateMachine.reset()
             wakeHoldSessionActive = false
         }

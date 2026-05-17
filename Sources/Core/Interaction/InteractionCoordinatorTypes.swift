@@ -345,6 +345,14 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
                 evidenceSummary: "apple.music.control|fast_path=true|trace_id=\(request.traceID)|error=music_app_unavailable"
             )
         }
+        guard await ensureMusicAppRunning() else {
+            return AgentMusicExecutionOutcome(
+                status: .failed,
+                message: "Music 启动失败，请手动打开后重试。",
+                outputText: nil,
+                evidenceSummary: "apple.music.control|fast_path=true|trace_id=\(request.traceID)|error=music_app_launch_failed"
+            )
+        }
 
         let parsed = parseCommand(from: request.command)
         let scriptResult: OsaScriptResult = await {
@@ -438,6 +446,42 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
             || FileManager.default.fileExists(atPath: "/System/Applications/Music.app")
     }
 
+    private var isMusicAppRunning: Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Music").isEmpty
+    }
+
+    private func ensureMusicAppRunning() async -> Bool {
+        if isMusicAppRunning {
+            return true
+        }
+
+        let knownAppURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Music")
+            ?? URL(fileURLWithPath: "/System/Applications/Music.app")
+        guard FileManager.default.fileExists(atPath: knownAppURL.path) else {
+            return false
+        }
+
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        let launched = await withCheckedContinuation { continuation in
+            NSWorkspace.shared.openApplication(at: knownAppURL, configuration: config) { app, error in
+                continuation.resume(returning: app != nil && error == nil)
+            }
+        }
+
+        guard launched else {
+            return false
+        }
+
+        for _ in 0..<12 {
+            if isMusicAppRunning {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
+        return isMusicAppRunning
+    }
+
     private func parseCommand(from rawCommand: String) -> ParsedCommand {
         let trimmed = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowered = trimmed.lowercased()
@@ -507,9 +551,11 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
                     "set requestedQuery to item 1 of argv",
                     "tell application \"Music\"",
                     "activate",
+                    "set shuffle enabled to false",
+                    "set libraryPlaylist to library playlist 1",
                     "set matchedTrack to missing value",
                     "try",
-                    "set matchedTracks to (every track of library playlist 1 whose (name contains requestedQuery) or (artist contains requestedQuery) or (album contains requestedQuery))",
+                    "set matchedTracks to (every track of libraryPlaylist whose (name contains requestedQuery) or (artist contains requestedQuery) or (album contains requestedQuery))",
                     "if (count of matchedTracks) > 0 then",
                     "set matchedTrack to item 1 of matchedTracks",
                     "end if",
@@ -519,11 +565,15 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
                     "if matchedTrack is missing value then",
                     "return \"track_not_found|requested_track=\" & requestedQuery",
                     "end if",
-                    "play matchedTrack",
+                    "set matchedPersistentID to persistent ID of matchedTrack",
+                    "play libraryPlaylist",
+                    "delay 0.08",
+                    "set queueTrack to first track of libraryPlaylist whose persistent ID is matchedPersistentID",
+                    "play queueTrack",
                     "delay 0.12",
                     "set finalState to (player state as string)",
                     "set nowTrack to current track",
-                    "return \"requested_track=\" & requestedQuery & \"|track=\" & (name of nowTrack as string) & \"|artist=\" & (artist of nowTrack as string) & \"|state=\" & finalState",
+                    "return \"requested_track=\" & requestedQuery & \"|selection_source=library\" & \"|queue_anchor=library_order\" & \"|shuffle=false\" & \"|track=\" & (name of nowTrack as string) & \"|artist=\" & (artist of nowTrack as string) & \"|state=\" & finalState",
                     "end tell",
                     "end run"
                 ],
@@ -535,6 +585,7 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
             lines: [
                 "tell application \"Music\"",
                 "activate",
+                "set shuffle enabled to false",
                 "play",
                 "set finalState to (player state as string)",
                 "set nowTrack to missing value",
@@ -542,9 +593,9 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
                 "set nowTrack to current track",
                 "end try",
                 "if nowTrack is missing value then",
-                "return \"state=\" & finalState",
+                "return \"selection_source=current_context|shuffle=false|state=\" & finalState",
                 "end if",
-                "return \"track=\" & (name of nowTrack as string) & \"|artist=\" & (artist of nowTrack as string) & \"|state=\" & finalState",
+                "return \"selection_source=current_context|shuffle=false|track=\" & (name of nowTrack as string) & \"|artist=\" & (artist of nowTrack as string) & \"|state=\" & finalState",
                 "end tell"
             ]
         )

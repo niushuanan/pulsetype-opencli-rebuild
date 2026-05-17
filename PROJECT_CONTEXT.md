@@ -33,6 +33,29 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 01:27 - Agent 音乐链路增强（自动拉起 Music + 同键轻点/长按分流 + 资料库顺序锚定）
+
+- 本次任务：按最新反馈修复三件事：Music 未打开时执行失败、开始键与 Agent 键不能复用、播放指定歌曲后下一首容易偏离资料库顺序。
+- 改了哪些文件：
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `Sources/Core/Hotkey/HotkeyStateStore.swift`
+  - `Sources/Core/Hotkey/GlobalHotkeyService.swift`
+  - `Sources/UI/SettingsView.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+- 改了什么：
+  - Agent 执行前新增 `ensureMusicAppRunning()`：如果 Music 没开就先拉起并短轮询确认运行，再继续执行 AppleScript。
+  - 热键冲突规则调整为允许“开始/结束说话”和“开启Agent”使用同一个修饰键。
+  - 新增“同键位模式”分流逻辑：同键位时，轻点只触发普通听写，长按只触发 Agent，避免互相抢占。
+  - `runPlay(query:)` 改为资料库锚定播放：先在 `library playlist 1` 检索，再显式锚定到资料库队列并关闭 `shuffle`，同时在证据里回传 `selection_source=library`、`queue_anchor=library_order`。
+  - 设置页提示文案补充“支持同一键位轻点/长按自动区分”。
+  - 新增单测 `testHotkeyStoreAllowsWakeAndAgentUsingSameModifier`，防止后续回归。
+- 为什么这样改：
+  - 第一条是可用性问题：用户不应先手动打开 Music 才能用 Agent。
+  - 第二条是交互效率问题：同一键位更符合语音场景的肌肉记忆。
+  - 第三条是播放一致性问题：要优先保证“从资料库选歌并沿资料库顺序继续播放”。
+- 影响了哪些模块：
+  - Agent 音乐执行前置检查、AppleScript 播放策略、全局热键状态机、设置页快捷键提示、核心单测集合。
+
 ### 2026-05-18 01:08 - 新增独立 Agent 音乐层（长按触发 + 历史分栏 + Apple Music 快路径）
 
 - 本次任务：在不接入 planner 的前提下，新增一层独立 Agent 功能，只做音乐控制，并保持现有普通听写链路不受影响。

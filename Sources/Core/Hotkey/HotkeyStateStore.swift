@@ -268,10 +268,7 @@ final class HotkeyStateStore: ObservableObject {
     }
 
     private func resolveConflict() {
-        if wakeTriggerMode == .modifierTap, wakeModifier == agentModifier {
-            hasConflict = true
-            conflictMessage = "开始/结束说话 与 开启Agent 不能使用同一个修饰键。"
-        } else if wakeTriggerMode == .modifierTap, cancelTriggerMode == .modifierTap, wakeModifier == cancelModifier {
+        if wakeTriggerMode == .modifierTap, cancelTriggerMode == .modifierTap, wakeModifier == cancelModifier {
             hasConflict = true
             conflictMessage = "开始键和取消键不能使用同一个修饰键。"
         } else {
