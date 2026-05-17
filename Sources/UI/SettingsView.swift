@@ -173,7 +173,7 @@ struct SettingsView: View {
     }
 
     private var metricsGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
+        LazyVGrid(columns: homeMetricColumns, spacing: 12) {
             HomeMetricCard(
                 title: "累计语音",
                 value: HomeStatsFormatter.durationText(controlCenterState.homeStatsSnapshot.totalDialogueDurationSeconds),
@@ -199,6 +199,10 @@ struct SettingsView: View {
                 symbolName: "keyboard.chevron.compact.down"
             )
         }
+    }
+
+    private var homeMetricColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(minimum: 128), spacing: 12), count: 4)
     }
 
     private var hotkeySection: some View {
