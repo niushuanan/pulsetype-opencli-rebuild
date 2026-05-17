@@ -4,6 +4,7 @@ import Foundation
 enum DesktopSection: String, CaseIterable, Identifiable {
     case home
     case history
+    case agent
     case settings
 
     var id: String { rawValue }
@@ -14,6 +15,8 @@ enum DesktopSection: String, CaseIterable, Identifiable {
             return "首页"
         case .history:
             return "历史"
+        case .agent:
+            return "Agent"
         case .settings:
             return "设置"
         }
@@ -25,6 +28,8 @@ enum DesktopSection: String, CaseIterable, Identifiable {
             return "waveform"
         case .history:
             return "clock"
+        case .agent:
+            return "sparkles"
         case .settings:
             return "gearshape"
         }

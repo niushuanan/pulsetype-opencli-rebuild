@@ -70,6 +70,8 @@ struct SettingsView: View {
             homePage
         case .history:
             historyPage
+        case .agent:
+            agentPage
         case .settings:
             settingsPage
         }
@@ -175,6 +177,24 @@ struct SettingsView: View {
         }
     }
 
+    private var agentPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                pageTitleText(
+                    "Agent",
+                    subtitle: "长按快捷键，一句话下指令。现在默认控制音乐，后续会逐步扩展更多能力。"
+                )
+                agentEntryCard
+                agentCurrentCapabilityCard
+                agentRecentRunsCard
+                agentRoadmapCard
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, PulseUI.Spacing.pageHorizontal)
+            .padding(.vertical, PulseUI.Spacing.pageVertical)
+        }
+    }
+
     private var settingsPage: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -190,6 +210,113 @@ struct SettingsView: View {
             enforceSingleKeyWakeMode()
             hotkeyStateStore.refresh()
         }
+    }
+
+    private var agentEntryCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader("当前入口", subtitle: "按住即可触发 Agent，松开后马上执行。")
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("触发按键")
+                        .font(PulseUI.Typography.caption)
+                        .pulseSecondaryText()
+                    Text(agentTriggerDisplayText)
+                        .font(PulseUI.Typography.bodyStrong)
+                }
+                Spacer()
+                Button("去快捷键设置") {
+                    controlCenterState.selectedSection = .settings
+                }
+                .controlCenterSecondaryActionButton()
+            }
+            Text("默认路径是音乐控制；后续会先判断你的意图，再自动调用对应能力。")
+                .font(PulseUI.Typography.caption)
+                .pulseSecondaryText()
+        }
+        .padding(16)
+        .controlCenterSectionGroup()
+    }
+
+    private var agentCurrentCapabilityCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader("当前可用能力", subtitle: "先把这条链路做到最快、最稳。")
+            Label("播放指定歌曲（从资料库里找）", systemImage: "play.circle")
+                .font(PulseUI.Typography.body)
+            Label("下一首 / 上一首（按资料库顺序）", systemImage: "forward.end")
+                .font(PulseUI.Typography.body)
+            Label("暂停 / 继续", systemImage: "pause.circle")
+                .font(PulseUI.Typography.body)
+            Label("Music 未打开时自动拉起", systemImage: "app.badge")
+                .font(PulseUI.Typography.body)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(agentCommandExamples, id: \.self) { command in
+                        agentCommandChip(command)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .controlCenterSectionGroup()
+    }
+
+    private var agentRecentRunsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("最近执行")
+                    .font(PulseUI.Typography.sectionTitle)
+                Text("只看 Agent 调用，方便快速复盘。")
+                    .font(PulseUI.Typography.body)
+                    .pulseSecondaryText()
+            }
+
+            HStack {
+                Spacer()
+                Button("查看全部") {
+                    controlCenterState.historyFilter = .agent
+                    controlCenterState.selectedSection = .history
+                }
+                .controlCenterSecondaryActionButton()
+            }
+
+            if agentRecentEntries.isEmpty {
+                Text("还没有 Agent 调用记录。你可以先试一句：播放稻香。")
+                    .font(PulseUI.Typography.caption)
+                    .pulseSecondaryText()
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(agentRecentEntries) { entry in
+                        agentRecentRunRow(entry)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .controlCenterSectionGroup()
+    }
+
+    private var agentRoadmapCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader("后续能力", subtitle: "这块会持续加，但页面会保持简洁。")
+            agentRoadmapItem(
+                title: "智能意图判断",
+                subtitle: "先判断你是要听歌、改系统，还是做别的任务。",
+                status: "准备中"
+            )
+            agentRoadmapItem(
+                title: "多能力工具箱",
+                subtitle: "同一个入口，逐步扩展到更多高频场景。",
+                status: "准备中"
+            )
+            agentRoadmapItem(
+                title: "跨应用自动执行",
+                subtitle: "一句话触发多步动作，减少手动点选。",
+                status: "规划中"
+            )
+        }
+        .padding(16)
+        .controlCenterSectionGroup()
     }
 
     private var metricsGrid: some View {
@@ -529,6 +656,119 @@ struct SettingsView: View {
 
     private var filteredHistoryEntries: [SessionHistoryEntry] {
         localHistoryStore.entries(matching: controlCenterState.historyFilter)
+    }
+
+    private var agentRecentEntries: [SessionHistoryEntry] {
+        Array(localHistoryStore.entries(matching: .agent).prefix(5))
+    }
+
+    private var agentTriggerDisplayText: String {
+        "\(hotkeyStateStore.agentModifier.displayName)（长按）"
+    }
+
+    private var agentCommandExamples: [String] {
+        [
+            "播放稻香",
+            "下一首",
+            "上一首",
+            "暂停播放"
+        ]
+    }
+
+    private func agentRecentRunRow(_ entry: SessionHistoryEntry) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(entry.timestamp.formatted(date: .abbreviated, time: .shortened))
+                    .font(PulseUI.Typography.caption)
+                    .pulseSecondaryText()
+                Spacer()
+                Text(agentStatusText(entry.status))
+                    .font(PulseUI.Typography.captionStrong)
+                    .foregroundStyle(agentStatusColor(entry.status))
+            }
+
+            Text(agentRecentRunSummary(entry))
+                .font(PulseUI.Typography.body)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("命令：\(entry.inputText)")
+                .font(PulseUI.Typography.caption)
+                .pulseSecondaryText()
+                .lineLimit(1)
+        }
+        .padding(10)
+        .controlCenterInsetPanel()
+    }
+
+    private func agentRecentRunSummary(_ entry: SessionHistoryEntry) -> String {
+        if let output = entry.outputText?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty {
+            return output
+        }
+        if let error = entry.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
+            return error
+        }
+        return "已执行，等待结果同步。"
+    }
+
+    private func agentStatusText(_ status: SessionHistoryStatus) -> String {
+        switch status {
+        case .success:
+            return "成功"
+        case .failed:
+            return "失败"
+        case .cancelled:
+            return "已取消"
+        }
+    }
+
+    private func agentStatusColor(_ status: SessionHistoryStatus) -> Color {
+        switch status {
+        case .success:
+            return PulseUI.ColorTokens.success
+        case .failed:
+            return PulseUI.ColorTokens.danger
+        case .cancelled:
+            return PulseUI.ColorTokens.warning
+        }
+    }
+
+    private func agentRoadmapItem(title: String, subtitle: String, status: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(PulseUI.Typography.bodyStrong)
+                Text(subtitle)
+                    .font(PulseUI.Typography.caption)
+                    .pulseSecondaryText()
+            }
+            Spacer()
+            Text(status)
+                .font(PulseUI.Typography.captionStrong)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule()
+                        .fill(Color.primary.opacity(0.08))
+                )
+        }
+        .padding(10)
+        .controlCenterInsetPanel()
+    }
+
+    private func agentCommandChip(_ text: String) -> some View {
+        Text(text)
+            .font(PulseUI.Typography.captionStrong)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(Color.primary.opacity(0.08))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
     }
 
     private var wakeTriggerModeBinding: Binding<HotkeyTriggerMode> {
