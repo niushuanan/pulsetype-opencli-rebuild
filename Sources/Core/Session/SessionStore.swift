@@ -38,7 +38,7 @@ final class SessionStore: ObservableObject {
         activeLane = .directDictation
         transition(
             to: .listening,
-            statusMessage: "正在听写，完成后会自动交给 DeepSeek 整理。",
+            statusMessage: "正在听写，完成后会自动交给文字模型整理。",
             hudProgressHint: SessionHUDProgressHint.idle
         )
     }

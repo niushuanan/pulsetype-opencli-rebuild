@@ -3,7 +3,6 @@ import Foundation
 struct DictationPostProcessRequest: Equatable {
     let transcript: String
     let focusContext: FocusedAppContext
-    let appPrompt: String?
     let userSystemPrompt: String
 }
 
@@ -82,7 +81,6 @@ struct DictationPostProcessPromptTemplate: Equatable {
 
 struct DictationPostProcessPromptBuilder {
     func build(request: DictationPostProcessRequest) -> DictationPostProcessPromptTemplate {
-        let appPrompt = request.appPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let userSystemPrompt = request.userSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let systemPrompt = """
@@ -93,12 +91,11 @@ struct DictationPostProcessPromptBuilder {
         2. 修正 ASR 噪声、口误、重复字、明显错别字和标点。
         3. 保留原意、语气和信息量，不要擅自扩写事实。
         4. 如果用户说的是口语短句，就整理成自然短句；如果用户说的是较长内容，就按原意补好标点和段落。
-        5. 遇到应用要求时优先遵守应用要求；遇到用户固定要求时在不违背原意的前提下遵守。
+        5. 遇到用户固定要求时，在不违背原意的前提下遵守。
 
         当前应用：\(request.focusContext.appName)
         Bundle ID：\(request.focusContext.bundleID)
 
-        应用要求：\(appPrompt.isEmpty ? "无" : appPrompt)
         用户固定要求：\(userSystemPrompt.isEmpty ? "无" : userSystemPrompt)
         """
 
@@ -143,7 +140,6 @@ struct LLMDictationPostProcessor: DictationPostProcessor {
             request: DictationPostProcessRequest(
                 transcript: normalizedTranscript,
                 focusContext: request.focusContext,
-                appPrompt: request.appPrompt,
                 userSystemPrompt: request.userSystemPrompt
             )
         )
@@ -200,7 +196,6 @@ extension LLMDictationPostProcessor: StreamingDictationPostProcessor {
             request: DictationPostProcessRequest(
                 transcript: normalizedTranscript,
                 focusContext: request.focusContext,
-                appPrompt: request.appPrompt,
                 userSystemPrompt: request.userSystemPrompt
             )
         )

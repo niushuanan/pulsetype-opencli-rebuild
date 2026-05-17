@@ -11,13 +11,28 @@ final class PulseTypeCoreTests: XCTestCase {
             credentialStore: MemoryCredentialStore()
         )
 
-        XCTAssertEqual(ProviderType.allCases, [.openAI, .openAICompatible, .dashScopeQwenASR])
+        XCTAssertEqual(ProviderType.allCases, [.openAI, .openAICompatible, .anthropic, .dashScopeQwenASR])
         XCTAssertEqual(store.asrConfig.providerType, .dashScopeQwenASR)
         XCTAssertEqual(store.asrConfig.modelName, "qwen3-asr-flash")
         XCTAssertEqual(store.textConfig.providerType, .openAICompatible)
         XCTAssertEqual(store.textConfig.baseURLString, "https://api.deepseek.com")
         XCTAssertEqual(store.textConfig.modelName, "deepseek-v4-flash")
+        XCTAssertEqual(store.textProcessingPrompt, ProviderSettingsStore.defaultTextProcessingPrompt)
         XCTAssertFalse(ProviderType.dashScopeQwenASR.supportsTextProcessing)
+    }
+
+    func testTextProviderInferenceSupportsAnthropicURL() {
+        let store = ProviderSettingsStore(
+            defaults: makeDefaults(),
+            credentialStore: MemoryCredentialStore()
+        )
+
+        store.updateTextBaseURL("https://api.anthropic.com")
+        store.updateTextModel("claude-3-5-sonnet-latest")
+
+        XCTAssertEqual(store.textConfig.providerType, .anthropic)
+        XCTAssertEqual(store.textConfig.baseURLString, "https://api.anthropic.com")
+        XCTAssertEqual(store.textConfig.modelName, "claude-3-5-sonnet-latest")
     }
 
     func testHistoryStoreKeepsOnlyOrdinaryDictationRowsFromOldFiles() throws {
@@ -169,7 +184,6 @@ final class PulseTypeCoreTests: XCTestCase {
             providerRegistry: SpeechProviderRegistry(providers: [FakeTranscriptionProvider()]),
             textOutputCoordinator: outputCoordinator,
             contextDetector: FixedContextDetector(),
-            appScenePolicyStore: AppScenePolicyStore(defaults: makeDefaults()),
             localHistoryStore: historyStore,
             speechPipelineLogger: SpeechPipelineLogger(diagnosticsDirectory: directory.appendingPathComponent("Diagnostics")),
             dictationPostProcessor: FakeDictationPostProcessor(output: "DeepSeek 整理后文本")

@@ -1,7 +1,7 @@
 # PROJECT_CONTEXT
 
 ## 这个项目是干什么的
-PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主链：录音、ASR 语音识别、DeepSeek 文本整理、写入当前输入位置、保存普通听写历史。
+PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主链：录音、ASR 语音识别、文字处理模型整理成稿、写入当前输入位置、保存普通听写历史。默认文本整理模型是 DeepSeek，但设置页允许改成 OpenAI、Anthropic 或其他 compatible gateway。
 
 该项目仓库：
 - https://github.com/niushuanan/pulsetype-opencli-rebuild
@@ -9,9 +9,9 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 ## 代码结构是什么
 - `Sources/App/`：应用入口、运行时装配、菜单栏与窗口启动。
 - `Sources/Core/Audio/`：录音与临时音频片段。
-- `Sources/Core/Speech/`：ASR provider、DeepSeek 配置、连接测试、凭据状态。
-- `Sources/Core/TextProcessing/`：DeepSeek 文本整理 provider、普通听写整理 prompt、流式文本生成。
-- `Sources/Core/Interaction/`：普通听写链路协调，负责录音停止后串起 ASR、DeepSeek、写入、历史。
+- `Sources/Core/Speech/`：ASR provider、文字处理模型配置、连接测试、凭据状态。
+- `Sources/Core/TextProcessing/`：文字处理 provider、普通听写整理 prompt、流式文本生成。
+- `Sources/Core/Interaction/`：普通听写链路协调，负责录音停止后串起 ASR、文字处理、写入、历史。
 - `Sources/Core/Session/`：会话状态与界面状态文案。
 - `Sources/Core/History/`：普通听写历史与统计。
 - `Sources/Core/TextOutput/`：把最终文本写入目标应用。
@@ -26,11 +26,19 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/App/PulseTypeApp.swift`：应用主入口。
 - `Sources/App/AppModel.swift`：运行时依赖装配入口。
 - `Sources/Core/Interaction/InteractionCoordinator.swift`：普通听写主链入口。
-- `Sources/Core/Speech/ProviderSettingsStore.swift`：ASR 与 DeepSeek 配置入口。
-- `Sources/Core/TextProcessing/DictationPostProcessor.swift`：DeepSeek 文本整理 prompt 与结果处理入口。
+- `Sources/Core/Speech/ProviderSettingsStore.swift`：ASR 与文字处理模型配置入口。
+- `Sources/Core/TextProcessing/DictationPostProcessor.swift`：文字整理 prompt 与结果处理入口。
 - `Sources/UI/SettingsView.swift`：控制中心页面入口。
 
 ## 最近改了什么
+### 2026-05-17 19:40 - 历史页与设置页进一步精简
+
+- 本次任务：继续清理历史页和设置页，只保留普通听写需要的配置与说明。
+- 改了哪些文件：`Sources/UI/SettingsView.swift`，`Sources/Core/Speech/ProviderSettingsStore.swift`，`Sources/Core/Speech/SpeechProvider.swift`，`Sources/Core/Speech/OpenAIEndpointResolver.swift`，`Sources/Core/Speech/SpeechConnectionTesters.swift`，`Sources/Core/TextProcessing/OpenAITextGenerationProvider.swift`，`Sources/Core/TextProcessing/DictationPostProcessor.swift`，`Sources/Core/Interaction/InteractionCoordinator.swift`，`Sources/Core/Session/SessionPhase.swift`，`Sources/Core/Session/SessionStore.swift`，`Sources/Core/Session/InputLane.swift`，`Sources/Core/Diagnostics/DiagnosticsCenter.swift`，`Sources/App/AppModel.swift`，`Sources/Core/Context/AppScenePolicyStore.swift`，`PulseType.xcodeproj/project.pbxproj`，`project.yml`，`README.md`，`Tests/PulseTypeCoreTests.swift`
+- 改了什么：历史页顶部去掉“筛选”字样；设置页删掉“当前应用处理要求”和“数据”区，只保留快捷键、ASR、文字处理模型；模型配置统一成 `Base URL + API key + 模型名`；文字处理模型新增前端可直接编辑并即时生效的全局提示词；文本模型接入补上 Anthropic messages 接口；旧的 per-app prompt store 整个删除。
+- 为什么这样改：让普通听写的配置面更直接，避免继续保留已经不需要的 per-app 策略和本地数据管理入口；同时把文本模型接口抽成更通用的 URL 驱动方式，便于兼容更多 provider。
+- 影响了哪些模块：历史页 UI、设置页 UI、文本模型配置持久化、听写后处理主链、文本模型连接测试、工程文件、项目说明与测试。
+
 ### 2026-05-17 17:52 - 首页信息架构调整
 
 - 本次任务：按反馈简化首页，只展示语音输入成果数据，不再放操作按钮和权限说明。
@@ -60,12 +68,12 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
   - `scripts/doctor-runtime.sh`
 - 改了什么：
   - 删掉高级自动化、工具调用、旧资源、旧测试和旧文档，只保留普通听写主链。
-  - ASR 保留 OpenAI 兼容接口和阿里云 Qwen ASR；DeepSeek 作为文本整理 provider。
+  - ASR 保留 OpenAI 兼容接口和阿里云 Qwen ASR；默认文本整理 provider 为 DeepSeek。
   - 历史页只展示普通听写记录，旧类型记录在读取时直接跳过。
   - 控制中心只保留首页、历史、设置三页。
-  - 设置页合并 ASR 与 DeepSeek 参数，不再有单独引擎页。
-  - 新增普通听写主链测试，覆盖配置、历史过滤、会话状态、流式稳定前缀、ASR 到 DeepSeek 到写入历史。
+  - 设置页合并 ASR 与文本模型参数，不再有单独引擎页。
+  - 新增普通听写主链测试，覆盖配置、历史过滤、会话状态、流式稳定前缀、ASR 到文字整理再到写入历史。
 - 为什么这样改：
   - 让产品形态回到最清楚的语音输入场景，减少无关能力造成的复杂度和维护风险。
 - 影响了哪些模块：
-  - 运行时装配、会话状态、ASR 配置、DeepSeek 文本处理、历史、控制中心 UI、快捷键、项目配置、测试体系。
+  - 运行时装配、会话状态、ASR 配置、文本处理、历史、控制中心 UI、快捷键、项目配置、测试体系。

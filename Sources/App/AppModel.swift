@@ -46,7 +46,6 @@ final class AppModel: ObservableObject {
     let speechProviderRegistry: SpeechProviderRegistry
     let textOutputCoordinator: TextOutputCoordinator
     let contextDetector: ContextDetector
-    let appScenePolicyStore: AppScenePolicyStore
     let permissionsCenter: PermissionsCenter
     let localStore: LocalStore
     let localHistoryStore: LocalHistoryStore
@@ -68,7 +67,6 @@ final class AppModel: ObservableObject {
         speechProviderRegistry: SpeechProviderRegistry,
         textOutputCoordinator: TextOutputCoordinator,
         contextDetector: ContextDetector,
-        appScenePolicyStore: AppScenePolicyStore,
         permissionsCenter: PermissionsCenter,
         localStore: LocalStore,
         localHistoryStore: LocalHistoryStore,
@@ -85,7 +83,6 @@ final class AppModel: ObservableObject {
         self.speechProviderRegistry = speechProviderRegistry
         self.textOutputCoordinator = textOutputCoordinator
         self.contextDetector = contextDetector
-        self.appScenePolicyStore = appScenePolicyStore
         self.permissionsCenter = permissionsCenter
         self.localStore = localStore
         self.localHistoryStore = localHistoryStore
@@ -120,7 +117,6 @@ final class AppModel: ObservableObject {
             ]
         )
         let contextDetector = AccessibilityContextDetector()
-        let appScenePolicyStore = AppScenePolicyStore()
         let textOutputCoordinator = AccessibilityTextOutputCoordinator(
             logger: TextOutputLogger(diagnosticsDirectory: store.diagnosticsDirectory),
             contextDetector: contextDetector
@@ -140,7 +136,6 @@ final class AppModel: ObservableObject {
             providerRegistry: speechProviderRegistry,
             textOutputCoordinator: textOutputCoordinator,
             contextDetector: contextDetector,
-            appScenePolicyStore: appScenePolicyStore,
             localHistoryStore: localHistoryStore,
             speechPipelineLogger: speechPipelineLogger,
             toastPresenter: toastPresenter
@@ -159,7 +154,6 @@ final class AppModel: ObservableObject {
             speechProviderRegistry: speechProviderRegistry,
             textOutputCoordinator: textOutputCoordinator,
             contextDetector: contextDetector,
-            appScenePolicyStore: appScenePolicyStore,
             permissionsCenter: permissionsCenter,
             localStore: store,
             localHistoryStore: localHistoryStore,
@@ -187,13 +181,6 @@ final class AppModel: ObservableObject {
 
     func registerControlCenterWindowOpener(_ opener: @escaping () -> Void) {
         controlCenterWindowOpener = opener
-    }
-
-    func purgeAllUsageData() {
-        localHistoryStore.clearAll()
-        purgeDirectoryContents(localStore.historyDirectory)
-        purgeDirectoryContents(localStore.diagnosticsDirectory)
-        purgeDirectoryContents(localStore.temporaryAudioDirectory)
     }
 
     private func activateGlobalHotkeys() {

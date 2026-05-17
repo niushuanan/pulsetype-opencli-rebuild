@@ -12,7 +12,7 @@ struct DiagnosticsCenter {
     func summaryLines() -> [String] {
         [
             "Version \(appVersion) (\(buildNumber))",
-            "普通听写：ASR -> DeepSeek -> 写入",
+            "普通听写：ASR -> 文字模型 -> 写入",
             "本地历史与诊断日志"
         ]
     }

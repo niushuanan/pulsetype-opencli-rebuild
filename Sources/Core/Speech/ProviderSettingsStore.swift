@@ -30,6 +30,12 @@ final class ProviderSettingsStore: ObservableObject {
         }
     }
 
+    @Published var textProcessingPrompt: String {
+        didSet {
+            persistTextProcessingPrompt()
+        }
+    }
+
     @Published var asrAPIKeyDraft: String = ""
     @Published var textAPIKeyDraft: String = ""
 
@@ -44,6 +50,7 @@ final class ProviderSettingsStore: ObservableObject {
     private let credentialStore: ProviderCredentialStore
     private let defaultsASRConfigKey = "providers.asr.config.v2"
     private let defaultsTextConfigKey = "providers.text.config.v2"
+    private let defaultsTextPromptKey = "providers.text.prompt.v1"
     private let defaultsLatestASRTestResultKey = "providers.asr.test.result.v1"
     private let defaultsLatestTextTestResultKey = "providers.text.test.result.v1"
 
@@ -59,6 +66,9 @@ final class ProviderSettingsStore: ObservableObject {
         self.textConfig = Self.sanitizeTextConfig(
             Self.decodeTextConfig(from: defaults.data(forKey: defaultsTextConfigKey)) ?? TextConfig()
         )
+        self.textProcessingPrompt = Self.decodeTextProcessingPrompt(
+            from: defaults.string(forKey: defaultsTextPromptKey)
+        )
         self.latestASRTestResult = Self.decodeConnectionTestResult(
             from: defaults.data(forKey: defaultsLatestASRTestResultKey)
         )
@@ -68,6 +78,7 @@ final class ProviderSettingsStore: ObservableObject {
 
         persistASRConfig()
         persistTextConfig()
+        persistTextProcessingPrompt()
         refreshCredentialState(allowUserInteraction: false)
     }
 
@@ -149,7 +160,7 @@ final class ProviderSettingsStore: ObservableObject {
         }
         textCredentialState = resolveCredentialState(
             keyRef: textConfig.keyRef,
-            roleName: "DeepSeek 文本处理",
+            roleName: "文字处理模型",
             allowUserInteraction: allowUserInteraction
         ) { [weak self] message in
             self?.textFeedbackMessage = message
@@ -181,12 +192,12 @@ final class ProviderSettingsStore: ObservableObject {
         saveAPIKey(
             draft: textAPIKeyDraft,
             keyRef: textConfig.keyRef,
-            roleName: "DeepSeek 文本处理",
+            roleName: "文字处理模型",
             onSaving: { [weak self] in self?.textCredentialState = .saving },
             onSuccess: { [weak self] in
                 self?.textAPIKeyDraft = ""
                 self?.textCredentialState = .saved
-                self?.textFeedbackMessage = "DeepSeek API 密钥已保存。"
+                self?.textFeedbackMessage = "文字处理模型 API 密钥已保存。"
                 self?.clearTextTestResult()
             },
             onFailure: { [weak self] state, message in
@@ -214,10 +225,10 @@ final class ProviderSettingsStore: ObservableObject {
     func clearTextAPIKey() -> Bool {
         clearAPIKey(
             keyRef: textConfig.keyRef,
-            roleName: "DeepSeek 文本处理",
+            roleName: "文字处理模型",
             onSuccess: { [weak self] in
                 self?.textCredentialState = .missing
-                self?.textFeedbackMessage = "DeepSeek API 密钥已删除。"
+                self?.textFeedbackMessage = "文字处理模型 API 密钥已删除。"
                 self?.clearTextTestResult()
             },
             onFailure: { [weak self] message in self?.textFeedbackMessage = message }
@@ -242,11 +253,7 @@ final class ProviderSettingsStore: ObservableObject {
         }
         var updated = asrConfig
         updated.providerType = type
-        if !type.allowsCustomBaseURL {
-            updated.baseURLString = type.recommendedBaseURLString
-        } else if updated.baseURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            updated.baseURLString = type.recommendedBaseURLString
-        }
+        updated.baseURLString = type.recommendedBaseURLString
         updated.modelName = type.defaultTranscriptionModelName
         asrConfig = updated
     }
@@ -256,27 +263,20 @@ final class ProviderSettingsStore: ObservableObject {
             return
         }
         var updated = textConfig
-        let previousProviderType = updated.providerType
-        let previousBaseURLString = updated.baseURLString
         updated.providerType = type
-        if !type.allowsCustomBaseURL {
-            updated.baseURLString = type.recommendedBaseURLString
-        } else if Self.shouldResetCompatibleBaseURL(
-            previousProviderType: previousProviderType,
-            previousBaseURLString: previousBaseURLString
-        ) {
-            updated.baseURLString = type.recommendedBaseURLString
-        }
+        updated.baseURLString = type.recommendedBaseURLString
         updated.modelName = type.defaultTextProcessingModelName
         textConfig = updated
     }
 
     func updateASRBaseURL(_ value: String) {
         asrConfig.baseURLString = value
+        asrConfig.providerType = Self.inferredASRProviderType(from: value)
     }
 
     func updateTextBaseURL(_ value: String) {
         textConfig.baseURLString = value
+        textConfig.providerType = Self.inferredTextProviderType(from: value)
     }
 
     func updateASRModel(_ value: String) {
@@ -379,6 +379,13 @@ final class ProviderSettingsStore: ObservableObject {
         if let data = try? JSONEncoder().encode(textConfig) {
             defaults.set(data, forKey: defaultsTextConfigKey)
         }
+    }
+
+    private func persistTextProcessingPrompt() {
+        defaults.set(
+            Self.normalizedPrompt(textProcessingPrompt),
+            forKey: defaultsTextPromptKey
+        )
     }
 
     private func persistLatestASRTestResult() {
@@ -523,6 +530,11 @@ final class ProviderSettingsStore: ObservableObject {
         return try? JSONDecoder().decode(TextConfig.self, from: data)
     }
 
+    private static func decodeTextProcessingPrompt(from value: String?) -> String {
+        let normalized = normalizedPrompt(value ?? "")
+        return normalized.isEmpty ? defaultTextProcessingPrompt : normalized
+    }
+
     private static func decodeConnectionTestResult(from data: Data?) -> ConnectionTestResult? {
         guard let data else {
             return nil
@@ -532,16 +544,13 @@ final class ProviderSettingsStore: ObservableObject {
 
     private static func sanitizeASRConfig(_ config: ASRConfig) -> ASRConfig {
         var sanitized = config
-        if !sanitized.providerType.supportsTranscription {
-            sanitized.providerType = .dashScopeQwenASR
-        }
+        sanitized.providerType = inferredASRProviderType(from: sanitized.baseURLString)
         sanitized.modelName = sanitized.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         if sanitized.modelName.isEmpty {
             sanitized.modelName = sanitized.providerType.defaultTranscriptionModelName
         }
-        if !sanitized.providerType.allowsCustomBaseURL {
-            sanitized.baseURLString = sanitized.providerType.recommendedBaseURLString
-        } else if sanitized.baseURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        sanitized.baseURLString = sanitized.baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if sanitized.baseURLString.isEmpty {
             sanitized.baseURLString = sanitized.providerType.recommendedBaseURLString
         }
         if sanitized.keyRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -552,16 +561,13 @@ final class ProviderSettingsStore: ObservableObject {
 
     private static func sanitizeTextConfig(_ config: TextConfig) -> TextConfig {
         var sanitized = config
-        if !sanitized.providerType.supportsTextProcessing {
-            sanitized.providerType = .openAICompatible
-        }
+        sanitized.providerType = inferredTextProviderType(from: sanitized.baseURLString)
         sanitized.modelName = sanitized.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         if sanitized.modelName.isEmpty {
             sanitized.modelName = sanitized.providerType.defaultTextProcessingModelName
         }
-        if !sanitized.providerType.allowsCustomBaseURL {
-            sanitized.baseURLString = sanitized.providerType.recommendedBaseURLString
-        } else if sanitized.baseURLString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        sanitized.baseURLString = sanitized.baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if sanitized.baseURLString.isEmpty {
             sanitized.baseURLString = sanitized.providerType.recommendedBaseURLString
         }
         if sanitized.keyRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -570,14 +576,46 @@ final class ProviderSettingsStore: ObservableObject {
         return sanitized
     }
 
-    private static func shouldResetCompatibleBaseURL(
-        previousProviderType: ProviderType,
-        previousBaseURLString: String
-    ) -> Bool {
-        if previousProviderType != .openAICompatible {
-            return true
+    private static func inferredASRProviderType(from baseURLString: String) -> ProviderType {
+        let host = normalizedHost(from: baseURLString)
+        if host.contains("dashscope.aliyuncs.com") {
+            return .dashScopeQwenASR
         }
-        let normalized = previousBaseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized.isEmpty || normalized == ProviderType.openAI.recommendedBaseURLString
+        if host.contains("api.openai.com") {
+            return .openAI
+        }
+        return .openAICompatible
     }
+
+    private static func inferredTextProviderType(from baseURLString: String) -> ProviderType {
+        let host = normalizedHost(from: baseURLString)
+        if host.contains("anthropic.com") {
+            return .anthropic
+        }
+        if host.contains("api.openai.com") {
+            return .openAI
+        }
+        return .openAICompatible
+    }
+
+    private static func normalizedHost(from baseURLString: String) -> String {
+        let normalized = baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: normalized) else {
+            return ""
+        }
+        return url.host?.lowercased() ?? ""
+    }
+
+    private static func normalizedPrompt(_ prompt: String) -> String {
+        prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static let defaultTextProcessingPrompt = """
+请把 ASR 原文整理成可以直接写入输入框的简体中文成稿：
+1. 删掉口头禅、重复词和明显识别噪声。
+2. 修正明显错别字，补齐标点和必要分段。
+3. 不扩写，不编造，不改变事实和语气。
+4. 专有名词、数字、时间、英文、代码、文件名尽量保留原样。
+5. 只输出最终文本，不要解释。
+"""
 }

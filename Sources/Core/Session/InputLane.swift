@@ -8,6 +8,6 @@ enum InputLane: String {
     }
 
     var summary: String {
-        "说话后由 ASR 转写，再交给 DeepSeek 整理，最后写入当前输入位置。"
+        "说话后由 ASR 转写，再交给文字模型整理，最后写入当前输入位置。"
     }
 }

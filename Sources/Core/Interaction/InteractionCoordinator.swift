@@ -11,7 +11,6 @@ final class InteractionCoordinator {
     private let providerRegistry: SpeechProviderRegistry
     private let textOutputCoordinator: TextOutputCoordinator
     private let contextDetector: ContextDetector
-    private let appScenePolicyStore: AppScenePolicyStore
     private let localHistoryStore: LocalHistoryStore
     private let speechPipelineLogger: SpeechPipelineLogger
     private let toastPresenter: ToastPresenter?
@@ -31,7 +30,6 @@ final class InteractionCoordinator {
         providerRegistry: SpeechProviderRegistry,
         textOutputCoordinator: TextOutputCoordinator,
         contextDetector: ContextDetector,
-        appScenePolicyStore: AppScenePolicyStore,
         localHistoryStore: LocalHistoryStore,
         speechPipelineLogger: SpeechPipelineLogger,
         toastPresenter: ToastPresenter? = nil,
@@ -44,7 +42,6 @@ final class InteractionCoordinator {
         self.providerRegistry = providerRegistry
         self.textOutputCoordinator = textOutputCoordinator
         self.contextDetector = contextDetector
-        self.appScenePolicyStore = appScenePolicyStore
         self.localHistoryStore = localHistoryStore
         self.speechPipelineLogger = speechPipelineLogger
         self.toastPresenter = toastPresenter
@@ -443,11 +440,9 @@ final class InteractionCoordinator {
             )
         }
 
-        let scenePolicy = appScenePolicyStore.policy(for: focusContext)
         let postProcessResult = await postProcessDictationIfNeeded(
             text: transcription.transcript,
             focusContext: focusContext,
-            appPrompt: scenePolicy.appPrompt,
             writebackTarget: writebackTarget
         )
         _ = await writebackWarmupTask.value
@@ -538,7 +533,6 @@ final class InteractionCoordinator {
     private func postProcessDictationIfNeeded(
         text: String,
         focusContext: FocusedAppContext,
-        appPrompt: String?,
         writebackTarget: DictationWritebackTarget?
     ) async -> DictationPostProcessOutcome {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -558,7 +552,7 @@ final class InteractionCoordinator {
                 text: normalized,
                 finalWritebackText: normalized,
                 priorStreamingWriteResult: nil,
-                nonBlockingNotice: "DeepSeek 配置无效，已直接使用 ASR 原文。"
+                nonBlockingNotice: "文字处理模型配置无效，已直接使用 ASR 原文。"
             )
         }
 
@@ -574,7 +568,7 @@ final class InteractionCoordinator {
                     text: normalized,
                     finalWritebackText: normalized,
                     priorStreamingWriteResult: nil,
-                    nonBlockingNotice: "缺少 DeepSeek API 密钥，已直接使用 ASR 原文。"
+                    nonBlockingNotice: "缺少文字处理模型 API 密钥，已直接使用 ASR 原文。"
                 )
             }
             apiKey = loaded
@@ -584,15 +578,14 @@ final class InteractionCoordinator {
                 text: normalized,
                 finalWritebackText: normalized,
                 priorStreamingWriteResult: nil,
-                nonBlockingNotice: "DeepSeek API 密钥读取失败，已直接使用 ASR 原文。"
+                nonBlockingNotice: "文字处理模型 API 密钥读取失败，已直接使用 ASR 原文。"
             )
         }
 
         let request = DictationPostProcessRequest(
             transcript: normalized,
             focusContext: focusContext,
-            appPrompt: appPrompt,
-            userSystemPrompt: ""
+            userSystemPrompt: providerSettingsStore.textProcessingPrompt
         )
         sessionStore.markDictationPostProcessing(
             providerName: configuration.providerName,
@@ -608,14 +601,15 @@ final class InteractionCoordinator {
                     focusContext: focusContext,
                     preferredTarget: writebackTarget?.snapshot
                 )
+                let sessionStore = self.sessionStore
                 streamingController = controller
                 result = try await streamingProcessor.processStreaming(
                     request: request,
                     configuration: configuration,
                     apiKey: apiKey,
-                    onPartialText: { [weak self] previewText in
+                    onPartialText: { previewText in
                         await MainActor.run {
-                            self?.sessionStore.updateDictationPostProcessingPreview(previewText)
+                            sessionStore.updateDictationPostProcessingPreview(previewText)
                         }
                         await controller.handlePartialText(previewText)
                     }
@@ -642,7 +636,7 @@ final class InteractionCoordinator {
                 text: normalized,
                 finalWritebackText: normalized,
                 priorStreamingWriteResult: nil,
-                nonBlockingNotice: "DeepSeek 处理失败，已直接使用 ASR 原文。"
+                nonBlockingNotice: "文字处理模型处理失败，已直接使用 ASR 原文。"
             )
         }
     }

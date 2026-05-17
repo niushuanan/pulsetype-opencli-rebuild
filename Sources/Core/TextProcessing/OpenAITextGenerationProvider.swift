@@ -1,7 +1,7 @@
 import Foundation
 
 struct OpenAITextGenerationProvider: TextGenerationProvider, StreamingTextGenerationProvider {
-    let supportedProviderTypes: [ProviderType] = [.openAI, .openAICompatible]
+    let supportedProviderTypes: [ProviderType] = [.openAI, .openAICompatible, .anthropic]
 
     private let session: URLSession
 
@@ -10,6 +10,26 @@ struct OpenAITextGenerationProvider: TextGenerationProvider, StreamingTextGenera
     }
 
     func generateText(
+        request: TextGenerationRequest,
+        configuration: TextGenerationProviderConfiguration,
+        apiKey: String
+    ) async throws -> TextGenerationResult {
+        if configuration.providerType == .anthropic {
+            return try await generateAnthropicText(
+                request: request,
+                configuration: configuration,
+                apiKey: apiKey
+            )
+        }
+
+        return try await generateOpenAICompatibleText(
+            request: request,
+            configuration: configuration,
+            apiKey: apiKey
+        )
+    }
+
+    private func generateOpenAICompatibleText(
         request: TextGenerationRequest,
         configuration: TextGenerationProviderConfiguration,
         apiKey: String
@@ -85,11 +105,102 @@ struct OpenAITextGenerationProvider: TextGenerationProvider, StreamingTextGenera
         )
     }
 
+    private func generateAnthropicText(
+        request: TextGenerationRequest,
+        configuration: TextGenerationProviderConfiguration,
+        apiKey: String
+    ) async throws -> TextGenerationResult {
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            throw TextProcessingProviderError.generationFailed(description: "API key is empty.")
+        }
+
+        let payload = AnthropicMessagesPayload(
+            model: configuration.modelName,
+            system: request.systemPrompt,
+            temperature: request.temperature,
+            maxTokens: request.maxOutputTokens ?? 512,
+            messages: [
+                .init(
+                    role: "user",
+                    content: [
+                        .init(type: "text", text: request.userPrompt)
+                    ]
+                )
+            ]
+        )
+
+        var urlRequest = URLRequest(
+            url: AnthropicEndpointResolver.messagesURL(baseURL: configuration.baseURL)
+        )
+        urlRequest.httpMethod = "POST"
+        urlRequest.timeoutInterval = 70
+        urlRequest.setValue(key, forHTTPHeaderField: "x-api-key")
+        urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try JSONEncoder().encode(payload)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw TextProcessingProviderError.generationFailed(description: error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw TextProcessingProviderError.generationFailed(description: "Invalid HTTP response.")
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            throw providerError(
+                statusCode: http.statusCode,
+                responseBody: String(data: data, encoding: .utf8) ?? ""
+            )
+        }
+
+        guard
+            let responsePayload = try? JSONDecoder().decode(AnthropicMessagesResponse.self, from: data),
+            !responsePayload.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw TextProcessingProviderError.generationFailed(description: "Missing text from model response.")
+        }
+
+        return TextGenerationResult(
+            providerType: configuration.providerType,
+            providerName: configuration.providerName,
+            modelName: configuration.modelName,
+            outputText: responsePayload.outputText
+        )
+    }
+
     func generateTextStream(
         request: TextGenerationRequest,
         configuration: TextGenerationProviderConfiguration,
         apiKey: String
     ) async throws -> AsyncThrowingStream<String, Error> {
+        if configuration.providerType == .anthropic {
+            return AsyncThrowingStream { continuation in
+                let task = Task {
+                    do {
+                        let result = try await generateAnthropicText(
+                            request: request,
+                            configuration: configuration,
+                            apiKey: apiKey
+                        )
+                        continuation.yield(result.outputText)
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+
+                continuation.onTermination = { _ in
+                    task.cancel()
+                }
+            }
+        }
+
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else {
             throw TextProcessingProviderError.generationFailed(description: "API key is empty.")
@@ -204,6 +315,12 @@ struct OpenAITextGenerationProvider: TextGenerationProvider, StreamingTextGenera
         responseBody: String
     ) -> TextProcessingProviderError {
         let data = Data(responseBody.utf8)
+        if
+            let errorEnvelope = try? JSONDecoder().decode(AnthropicErrorEnvelope.self, from: data),
+            let message = errorEnvelope.error.message
+        {
+            return .generationFailed(description: "HTTP \(statusCode): \(message)")
+        }
         if
             let errorEnvelope = try? JSONDecoder().decode(ChatCompletionsErrorEnvelope.self, from: data),
             let message = errorEnvelope.error.message
@@ -355,4 +472,54 @@ private struct ChatCompletionsStreamChunk: Decodable {
             .compactMap { $0.delta?.content?.textValue }
             .joined()
     }
+}
+
+private struct AnthropicMessagesPayload: Encodable {
+    struct Message: Encodable {
+        struct Content: Encodable {
+            let type: String
+            let text: String
+        }
+
+        let role: String
+        let content: [Content]
+    }
+
+    let model: String
+    let system: String
+    let temperature: Double
+    let maxTokens: Int
+    let messages: [Message]
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case system
+        case temperature
+        case maxTokens = "max_tokens"
+        case messages
+    }
+}
+
+private struct AnthropicMessagesResponse: Decodable {
+    struct Content: Decodable {
+        let type: String
+        let text: String?
+    }
+
+    let content: [Content]
+
+    var outputText: String {
+        content
+            .filter { $0.type == "text" }
+            .compactMap(\.text)
+            .joined()
+    }
+}
+
+private struct AnthropicErrorEnvelope: Decodable {
+    struct Payload: Decodable {
+        let message: String?
+    }
+
+    let error: Payload
 }

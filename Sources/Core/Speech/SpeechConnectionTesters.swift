@@ -74,6 +74,11 @@ struct ASRConnectionTester {
                 apiKey: apiKey,
                 audioData: audioData
             )
+        case .anthropic:
+            return .failure(
+                message: "当前接口不支持 ASR 测试。",
+                hint: "请把语音识别接口地址改为支持转写的 provider。"
+            )
         }
     }
 
@@ -288,6 +293,14 @@ struct ASRConnectionTester {
     }
 
     static func parseProviderError(from data: Data) -> String {
+        if
+            let payload = try? JSONDecoder().decode(AnthropicConnectionErrorEnvelope.self, from: data),
+            let message = payload.error.message?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !message.isEmpty
+        {
+            return redactSensitiveText(message)
+        }
+
         if let businessError = DashScopeResponseParser.businessError(from: data) {
             return redactSensitiveText(businessError.displayMessage)
         }
@@ -408,6 +421,26 @@ struct TextConnectionTester {
             )
         }
 
+        if config.providerType == .anthropic {
+            return await testAnthropic(
+                config: config,
+                baseURL: baseURL,
+                apiKey: apiKey
+            )
+        }
+
+        return await testOpenAICompatible(
+            config: config,
+            baseURL: baseURL,
+            apiKey: apiKey
+        )
+    }
+
+    private func testOpenAICompatible(
+        config: TextConfig,
+        baseURL: URL,
+        apiKey: String
+    ) async -> ConnectionTestResult {
         let endpoint = OpenAIEndpointResolver.chatCompletionsURL(baseURL: baseURL)
         let payload = TextConnectionPayload(
             model: config.modelName.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -476,6 +509,86 @@ struct TextConnectionTester {
         }
     }
 
+    private func testAnthropic(
+        config: TextConfig,
+        baseURL: URL,
+        apiKey: String
+    ) async -> ConnectionTestResult {
+        let endpoint = AnthropicEndpointResolver.messagesURL(baseURL: baseURL)
+        let payload = AnthropicTextConnectionPayload(
+            model: config.modelName.trimmingCharacters(in: .whitespacesAndNewlines),
+            system: "你是连接测试助手。",
+            temperature: 0,
+            maxTokens: 64,
+            messages: [
+                .init(
+                    role: "user",
+                    content: [
+                        .init(type: "text", text: "请只回复“连接正常”。")
+                    ]
+                )
+            ]
+        )
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        do {
+            request.httpBody = try JSONEncoder().encode(payload)
+        } catch {
+            return .failure(
+                message: "文本模型测试失败：请求编码异常。",
+                hint: "请检查模型名后重试。"
+            )
+        }
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure(
+                    message: "文本模型测试失败：无效 HTTP 响应。",
+                    hint: "请检查接口地址是否正确。"
+                )
+            }
+
+            if (200..<300).contains(http.statusCode) {
+                guard let output = Self.parseAnthropicTextOutput(from: data) else {
+                    return .failure(
+                        message: "文本模型接口可达，但返回内容无法解析。",
+                        hint: "请确认接口兼容 Anthropic `/v1/messages`。",
+                        httpStatus: http.statusCode
+                    )
+                }
+                return .success(
+                    message: "文本模型测试成功：\(output)",
+                    hint: "接口、模型与密钥均可用。",
+                    httpStatus: http.statusCode
+                )
+            }
+
+            let detail = ASRConnectionTester.parseProviderError(from: data)
+            return .failure(
+                message: "文本模型测试失败：HTTP \(http.statusCode) \(detail)",
+                hint: ConnectionTestHintResolver.hint(for: http.statusCode),
+                httpStatus: http.statusCode
+            )
+        } catch let urlError as URLError {
+            return .failure(
+                message: "文本模型测试失败：网络异常 \(urlError.localizedDescription)",
+                hint: "请检查网络、代理或接口地址是否可访问。"
+            )
+        } catch {
+            return .failure(
+                message: "文本模型测试失败：\(error.localizedDescription)",
+                hint: "请稍后重试，如反复失败请检查地址与密钥。"
+            )
+        }
+    }
+
     private static func parseTextOutput(from data: Data) -> String? {
         guard
             let response = try? JSONDecoder().decode(TextConnectionResponse.self, from: data),
@@ -486,6 +599,18 @@ struct TextConnectionTester {
             return nil
         }
         return first
+    }
+
+    private static func parseAnthropicTextOutput(from data: Data) -> String? {
+        guard let response = try? JSONDecoder().decode(AnthropicTextConnectionResponse.self, from: data) else {
+            return nil
+        }
+        let output = response.content
+            .filter { $0.type == "text" }
+            .compactMap(\.text)
+            .joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return output.isEmpty ? nil : output
     }
 
     private func resolvedThinkingMode(for config: TextConfig) -> TextConnectionPayload.ThinkingMode? {
@@ -551,6 +676,41 @@ private struct TextConnectionResponse: Decodable {
     }
 
     let choices: [Choice]
+}
+
+private struct AnthropicTextConnectionPayload: Encodable {
+    struct Message: Encodable {
+        struct Content: Encodable {
+            let type: String
+            let text: String
+        }
+
+        let role: String
+        let content: [Content]
+    }
+
+    let model: String
+    let system: String
+    let temperature: Double
+    let maxTokens: Int
+    let messages: [Message]
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case system
+        case temperature
+        case maxTokens = "max_tokens"
+        case messages
+    }
+}
+
+private struct AnthropicTextConnectionResponse: Decodable {
+    struct Content: Decodable {
+        let type: String
+        let text: String?
+    }
+
+    let content: [Content]
 }
 
 private enum DiagnosticAudioSample {
@@ -631,6 +791,14 @@ private struct ConnectionTestErrorEnvelope: Decodable {
 
 private struct DashScopeSimpleErrorEnvelope: Decodable {
     let message: String?
+}
+
+private struct AnthropicConnectionErrorEnvelope: Decodable {
+    struct Payload: Decodable {
+        let message: String?
+    }
+
+    let error: Payload
 }
 
 private extension Data {

@@ -7,6 +7,7 @@ let defaultTextCredentialKeyRef = "text.primary"
 enum ProviderType: String, CaseIterable, Codable, Identifiable {
     case openAI
     case openAICompatible
+    case anthropic
     case dashScopeQwenASR
 
     var id: String { rawValue }
@@ -17,6 +18,8 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
             return "OpenAI（官方）"
         case .openAICompatible:
             return "OpenAI 兼容"
+        case .anthropic:
+            return "Anthropic"
         case .dashScopeQwenASR:
             return "阿里云 Qwen ASR"
         }
@@ -28,6 +31,8 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
             return "OpenAI"
         case .openAICompatible:
             return "兼容"
+        case .anthropic:
+            return "Anthropic"
         case .dashScopeQwenASR:
             return "Qwen"
         }
@@ -37,7 +42,7 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .dashScopeQwenASR:
             return "qwen3-asr-flash"
-        case .openAI, .openAICompatible:
+        case .openAI, .openAICompatible, .anthropic:
             return "whisper-1"
         }
     }
@@ -48,6 +53,8 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
             return "gpt-4o-mini"
         case .openAICompatible, .dashScopeQwenASR:
             return "deepseek-v4-flash"
+        case .anthropic:
+            return "claude-3-5-haiku-latest"
         }
     }
 
@@ -55,12 +62,14 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .openAI, .openAICompatible, .dashScopeQwenASR:
             return true
+        case .anthropic:
+            return false
         }
     }
 
     var supportsTextProcessing: Bool {
         switch self {
-        case .openAI, .openAICompatible:
+        case .openAI, .openAICompatible, .anthropic:
             return true
         case .dashScopeQwenASR:
             return false
@@ -72,7 +81,12 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
     }
 
     var allowsCustomBaseURL: Bool {
-        self == .openAICompatible
+        switch self {
+        case .openAICompatible, .anthropic:
+            return true
+        case .openAI, .dashScopeQwenASR:
+            return false
+        }
     }
 
     var fixedBaseURL: URL? {
@@ -80,6 +94,8 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
         case .openAI:
             return URL(string: "https://api.openai.com")
         case .openAICompatible:
+            return nil
+        case .anthropic:
             return nil
         case .dashScopeQwenASR:
             return URL(string: "https://dashscope.aliyuncs.com")
@@ -90,6 +106,8 @@ enum ProviderType: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .openAICompatible:
             return "https://api.deepseek.com"
+        case .anthropic:
+            return "https://api.anthropic.com"
         default:
             return fixedBaseURL?.absoluteString ?? ""
         }
@@ -252,13 +270,9 @@ enum ProviderConfigurationValidator {
         providerType: ProviderType,
         baseURLString: String
     ) -> URL? {
-        if let fixedURL = providerType.fixedBaseURL {
-            return fixedURL
-        }
-
         let normalized = baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else {
-            return nil
+        if normalized.isEmpty {
+            return providerType.fixedBaseURL
         }
 
         guard let url = URL(string: normalized), let scheme = url.scheme?.lowercased() else {

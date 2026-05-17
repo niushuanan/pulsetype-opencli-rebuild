@@ -17,7 +17,6 @@
 		1FA6F2B5B36D2978385487DE /* PulseTypeCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54F800151C9A9879FE6182B /* PulseTypeCoreTests.swift */; };
 		25B52700001812DBAFD9D261 /* DictationPostProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2263494F2431C0E6A4D09D5 /* DictationPostProcessor.swift */; };
 		2EC32C636372DEE9E912CB05 /* OpenAIEndpointResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 651B002BCD715F07DBF78CE4 /* OpenAIEndpointResolver.swift */; };
-		382AEFF6E0F7F9BCFCAF3691 /* AppScenePolicyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD3BEE22B923D79D9B8964B /* AppScenePolicyStore.swift */; };
 		42CC9CE02F1BA893CE173C4C /* SpeechConnectionTesters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CDC7C688C0027BF75F3AB3B /* SpeechConnectionTesters.swift */; };
 		506D2F6F8BD28EFAA794A708 /* SpeechTranscriptionErrorPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3141432F39E579F9ED47CC5 /* SpeechTranscriptionErrorPresentation.swift */; };
 		5BEF4C142B837D5D710A4ABA /* LocalHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7AACAD05F67BBE70749EFCB /* LocalHistoryStore.swift */; };
@@ -68,7 +67,6 @@
 
 /* Begin PBXFileReference section */
 		0DB26F7CC49FA783F26760E3 /* HomeStatsFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeStatsFormatter.swift; sourceTree = "<group>"; };
-		0FD3BEE22B923D79D9B8964B /* AppScenePolicyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppScenePolicyStore.swift; sourceTree = "<group>"; };
 		157337AD796A00BA0C88EF3E /* KeychainProviderCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainProviderCredentialStore.swift; sourceTree = "<group>"; };
 		1691E3B3D2D0AC8A19526566 /* PermissionsCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionsCenter.swift; sourceTree = "<group>"; };
 		1CDC7C688C0027BF75F3AB3B /* SpeechConnectionTesters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechConnectionTesters.swift; sourceTree = "<group>"; };
@@ -357,7 +355,6 @@
 		F9E8A261F7EED0E04F6E680F /* Context */ = {
 			isa = PBXGroup;
 			children = (
-				0FD3BEE22B923D79D9B8964B /* AppScenePolicyStore.swift */,
 				F647CE4661A5CCCA8EA7CC20 /* ContextDetector.swift */,
 			);
 			path = Context;
@@ -465,7 +462,6 @@
 				8F82F460B556E143E651AE5D /* AppDelegate.swift in Sources */,
 				FD46E29D44B77B9A97D545B8 /* AppModel.swift in Sources */,
 				0BFF36E08E600A3BF576CB58 /* AppRuntimePolicy.swift in Sources */,
-				382AEFF6E0F7F9BCFCAF3691 /* AppScenePolicyStore.swift in Sources */,
 				D7565185FDA605CB6CEBFB93 /* AudioCaptureService.swift in Sources */,
 				66CFDCBAF88AFDA93F19A236 /* ConnectionFailureAdvisor.swift in Sources */,
 				9D54DEAC95CDA361E6C4D07C /* ConnectionTestResult.swift in Sources */,
@@ -538,7 +534,7 @@
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "PulseType 需要自动化权限，用于把文本写入到其他应用。";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PulseType 会在你开始普通听写时录音，用于 ASR 转写与 DeepSeek 文本整理。";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PulseType 会在你开始普通听写时录音，用于 ASR 转写与文字模型整理。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -720,7 +716,7 @@
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "PulseType 需要自动化权限，用于把文本写入到其他应用。";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PulseType 会在你开始普通听写时录音，用于 ASR 转写与 DeepSeek 文本整理。";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PulseType 会在你开始普通听写时录音，用于 ASR 转写与文字模型整理。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

@@ -14,8 +14,6 @@ struct SettingsView: View {
     @State private var asrTesting = false
     @State private var textTesting = false
     @State private var showClearHistoryConfirmation = false
-    @State private var appPromptDraft = ""
-    @State private var appPromptTarget: FocusedAppContext?
 
     init(model: AppModel) {
         self.model = model
@@ -82,7 +80,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 pageTitleText(
                     "语音输入概览",
-                    subtitle: "按 \(hotkeyStateStore.wakeShortcutText) 开始或停止，ASR 识别后由 DeepSeek 整理并写入当前应用。"
+                    subtitle: "按 \(hotkeyStateStore.wakeShortcutText) 开始或停止，ASR 识别后由文字模型整理并写入当前应用。"
                 )
                 metricsGrid
             }
@@ -97,12 +95,13 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 pageTitleText("历史", subtitle: "这里只保存普通听写结果，旧的高级能力记录不会展示。")
                 HStack(spacing: 10) {
-                    Picker("筛选", selection: $controlCenterState.historyFilter) {
+                    Picker("", selection: $controlCenterState.historyFilter) {
                         ForEach(LocalHistoryFilter.allCases) { filter in
                             Text(filter.title).tag(filter)
                         }
                     }
                     .pickerStyle(.segmented)
+                    .labelsHidden()
                     .frame(maxWidth: 320)
 
                     Spacer()
@@ -156,11 +155,9 @@ struct SettingsView: View {
     private var settingsPage: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                pageTitleText("设置", subtitle: "ASR 和 DeepSeek 参数都在这里，旧的引擎页已经合并到设置。")
+                pageTitleText("设置", subtitle: "这里只保留快捷键、ASR 和文字处理模型。")
                 hotkeySection
                 providerSection
-                appPromptSection
-                dataSection
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, PulseUI.Spacing.pageHorizontal)
@@ -168,7 +165,6 @@ struct SettingsView: View {
         }
         .onAppear {
             hotkeyStateStore.refresh()
-            refreshAppPromptDraft()
         }
     }
 
@@ -183,7 +179,7 @@ struct SettingsView: View {
             HomeMetricCard(
                 title: "成稿字数",
                 value: HomeStatsFormatter.integerText(controlCenterState.homeStatsSnapshot.totalInputCharacters),
-                subtitle: "DeepSeek 处理后的最终文本",
+                subtitle: "文字模型整理后的最终文本",
                 symbolName: "text.alignleft"
             )
             HomeMetricCard(
@@ -253,11 +249,10 @@ struct SettingsView: View {
 
     private var providerSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            sectionHeader("ASR 与 DeepSeek", subtitle: "语音识别和文本整理都在这里配置。")
-            providerEditor(
+            sectionHeader("模型设置", subtitle: "接口地址、模型名和密钥都在这里。")
+            modelEditor(
                 title: "语音识别 ASR",
-                providerTypes: ProviderType.allCases.filter(\.supportsTranscription),
-                selectedProvider: asrProviderBinding,
+                subtitle: "按接口地址自动适配 OpenAI compatible 与 Qwen ASR。",
                 baseURL: Binding(
                     get: { providerSettingsStore.asrConfig.baseURLString },
                     set: { providerSettingsStore.updateASRBaseURL($0) }
@@ -278,97 +273,68 @@ struct SettingsView: View {
 
             Divider()
 
-            providerEditor(
-                title: "DeepSeek 文本整理",
-                providerTypes: ProviderType.allCases.filter(\.supportsTextProcessing),
-                selectedProvider: textProviderBinding,
-                baseURL: Binding(
-                    get: { providerSettingsStore.textConfig.baseURLString },
-                    set: { providerSettingsStore.updateTextBaseURL($0) }
-                ),
-                modelName: Binding(
-                    get: { providerSettingsStore.textConfig.modelName },
-                    set: { providerSettingsStore.updateTextModel($0) }
-                ),
-                apiKeyDraft: $providerSettingsStore.textAPIKeyDraft,
-                credentialState: providerSettingsStore.textCredentialState,
-                validationMessage: providerSettingsStore.textConfigurationValidationMessage,
-                latestResult: providerSettingsStore.latestTextTestResult,
-                isTesting: textTesting,
-                saveAction: { _ = providerSettingsStore.saveTextAPIKeyDraft() },
-                clearAction: { _ = providerSettingsStore.clearTextAPIKey() },
-                testAction: testTextConnection
-            )
-        }
-        .padding(16)
-        .controlCenterSectionGroup()
-    }
-
-    private var appPromptSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("当前应用处理要求", subtitle: "可选。比如在微信里更口语，在邮件里更正式。")
-
-            HStack {
-                Text(appPromptTarget?.appName ?? "当前应用")
-                    .font(PulseUI.Typography.bodyStrong)
-                Spacer()
-                Button("刷新当前应用") {
-                    refreshAppPromptDraft()
-                    showToast("已读取当前前台应用。")
-                }
-                .controlCenterSecondaryActionButton()
-            }
-
-            TextEditor(text: $appPromptDraft)
-                .font(PulseUI.Typography.body)
-                .frame(minHeight: 82)
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .background(
-                    RoundedRectangle(cornerRadius: PulseUI.Radius.card, style: .continuous)
-                        .fill(Color.white.opacity(0.45))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: PulseUI.Radius.card, style: .continuous)
-                                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
-                        )
+            VStack(alignment: .leading, spacing: 14) {
+                modelEditor(
+                    title: "文字处理模型",
+                    subtitle: "按接口地址自动适配 OpenAI、Anthropic 与其他 compatible gateway。",
+                    baseURL: Binding(
+                        get: { providerSettingsStore.textConfig.baseURLString },
+                        set: { providerSettingsStore.updateTextBaseURL($0) }
+                    ),
+                    modelName: Binding(
+                        get: { providerSettingsStore.textConfig.modelName },
+                        set: { providerSettingsStore.updateTextModel($0) }
+                    ),
+                    apiKeyDraft: $providerSettingsStore.textAPIKeyDraft,
+                    credentialState: providerSettingsStore.textCredentialState,
+                    validationMessage: providerSettingsStore.textConfigurationValidationMessage,
+                    latestResult: providerSettingsStore.latestTextTestResult,
+                    isTesting: textTesting,
+                    saveAction: { _ = providerSettingsStore.saveTextAPIKeyDraft() },
+                    clearAction: { _ = providerSettingsStore.clearTextAPIKey() },
+                    testAction: testTextConnection
                 )
 
-            HStack {
-                Spacer()
-                Button("保存要求") {
-                    saveAppPromptDraft()
-                }
-                .controlCenterPrimaryActionButton()
-                .disabled(appPromptTarget == nil)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("文字处理提示词")
+                        .font(PulseUI.Typography.bodyStrong)
+                    Text("这里改完后，下一次文字整理会直接用新提示词。")
+                        .font(PulseUI.Typography.caption)
+                        .pulseSecondaryText()
 
-                Button("清除") {
-                    clearAppPromptDraft()
+                    TextEditor(text: $providerSettingsStore.textProcessingPrompt)
+                        .font(PulseUI.Typography.body)
+                        .frame(minHeight: 124)
+                        .scrollContentBackground(.hidden)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: PulseUI.Radius.card, style: .continuous)
+                                .fill(Color.white.opacity(0.45))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: PulseUI.Radius.card, style: .continuous)
+                                        .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+                                )
+                        )
+
+                    HStack {
+                        Spacer()
+                        Button("恢复默认提示词") {
+                            providerSettingsStore.textProcessingPrompt = ProviderSettingsStore.defaultTextProcessingPrompt
+                            showToast("默认提示词已恢复。")
+                        }
+                        .controlCenterSecondaryActionButton()
+                    }
                 }
-                .controlCenterSecondaryActionButton()
-                .disabled(appPromptTarget == nil)
             }
+            .padding(.top, 2)
         }
         .padding(16)
         .controlCenterSectionGroup()
     }
 
-    private var dataSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("数据", subtitle: "只保留普通听写历史、诊断日志和临时录音。")
-            Button("清理本地使用数据", role: .destructive) {
-                model.purgeAllUsageData()
-                showToast("本地使用数据已清理。")
-            }
-            .controlCenterSecondaryActionButton()
-        }
-        .padding(16)
-        .controlCenterSectionGroup()
-    }
-
-    private func providerEditor(
+    private func modelEditor(
         title: String,
-        providerTypes: [ProviderType],
-        selectedProvider: Binding<ProviderType>,
+        subtitle: String,
         baseURL: Binding<String>,
         modelName: Binding<String>,
         apiKeyDraft: Binding<String>,
@@ -381,26 +347,16 @@ struct SettingsView: View {
         testAction: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(PulseUI.Typography.sectionTitle)
-
-            Picker("服务", selection: selectedProvider) {
-                ForEach(providerTypes) { type in
-                    Text(type.displayName).tag(type)
-                }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(PulseUI.Typography.sectionTitle)
+                Text(subtitle)
+                    .font(PulseUI.Typography.caption)
+                    .pulseSecondaryText()
             }
-            .pickerStyle(.menu)
 
-            if selectedProvider.wrappedValue.allowsCustomBaseURL {
-                TextField("Base URL", text: baseURL)
-                    .textFieldStyle(.roundedBorder)
-            } else {
-                LabeledContent("Base URL") {
-                    Text(selectedProvider.wrappedValue.recommendedBaseURLString)
-                        .font(PulseUI.Typography.monospacedMeta)
-                        .pulseSecondaryText()
-                }
-            }
+            TextField("Base URL", text: baseURL)
+                .textFieldStyle(.roundedBorder)
 
             TextField("模型名", text: modelName)
                 .textFieldStyle(.roundedBorder)
@@ -515,7 +471,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("当前还没有普通听写历史。", systemImage: "tray")
                 .font(PulseUI.Typography.bodyStrong)
-            Text("完成一次听写后，ASR 原文、DeepSeek 结果和写入目标会显示在这里。")
+            Text("完成一次听写后，ASR 原文、整理后的成稿和写入目标会显示在这里。")
                 .font(PulseUI.Typography.caption)
                 .pulseSecondaryText()
         }
@@ -541,20 +497,6 @@ struct SettingsView: View {
         )
     }
 
-    private var asrProviderBinding: Binding<ProviderType> {
-        Binding(
-            get: { providerSettingsStore.asrConfig.providerType },
-            set: { providerSettingsStore.updateASRProviderType($0) }
-        )
-    }
-
-    private var textProviderBinding: Binding<ProviderType> {
-        Binding(
-            get: { providerSettingsStore.textConfig.providerType },
-            set: { providerSettingsStore.updateTextProviderType($0) }
-        )
-    }
-
     private func testASRConnection() {
         asrTesting = true
         Task {
@@ -569,29 +511,6 @@ struct SettingsView: View {
             _ = await providerSettingsStore.testTextConnection()
             textTesting = false
         }
-    }
-
-    private func refreshAppPromptDraft() {
-        let context = model.contextDetector.focusedAppContext()
-        appPromptTarget = context
-        appPromptDraft = model.appScenePolicyStore.policy(for: context).appPrompt
-    }
-
-    private func saveAppPromptDraft() {
-        guard let appPromptTarget else {
-            return
-        }
-        model.appScenePolicyStore.upsertPolicy(for: appPromptTarget, appPrompt: appPromptDraft)
-        showToast("当前应用处理要求已保存。")
-    }
-
-    private func clearAppPromptDraft() {
-        guard let appPromptTarget else {
-            return
-        }
-        appPromptDraft = ""
-        model.appScenePolicyStore.removePolicy(bundleID: appPromptTarget.bundleID)
-        showToast("当前应用处理要求已清除。")
     }
 
     private func copyText(_ text: String, toast: String) {
