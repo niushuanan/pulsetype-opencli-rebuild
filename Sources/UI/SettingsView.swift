@@ -619,11 +619,11 @@ private struct SettingsSidebarSelectionButtonStyle: ButtonStyle {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: PulseUI.Radius.compactCard, style: .continuous)
                     .fill(fillColor)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: PulseUI.Radius.compactCard, style: .continuous)
                     .stroke(Color.black.opacity(isEnabled ? 0.06 : 0.03), lineWidth: 1)
             )
             .opacity(configuration.isPressed && isEnabled ? 0.90 : 1.0)
