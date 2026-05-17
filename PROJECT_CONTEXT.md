@@ -33,6 +33,22 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 01:48 - Agent “下一首/上一首”强制按资料库顺序执行
+
+- 本次任务：修复“播放后说下一首仍会跳到非资料库预期歌曲”的问题。
+- 改了哪些文件：
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 重写 `runNext()`：不再调用 `next track`，改为每次读取 `library playlist 1`，按当前曲目的 `persistent ID` 在资料库里定位索引，再显式播放“下一条”资料库曲目（末尾回绕到第一首）。
+  - 重写 `runPrevious()`：同样按资料库索引显式播放“上一条”资料库曲目（首位回绕到最后一首）。
+  - 两条路径都强制 `shuffle=false`、`song repeat=off`，并在证据里标注 `selection_source=library|queue_anchor=library_order|step=next/previous`。
+- 为什么这样改：
+  - 之前 `next track` 受 Music 当前上下文影响，可能被系统队列或上下文接管，导致结果偏离资料库顺序。
+  - 显式按资料库索引选曲可以把行为固定下来，不依赖当前队列状态。
+- 影响了哪些模块：
+  - Agent 音乐执行器的 `next/previous` 路径、播放证据可观测性、资料库顺序一致性。
+
 ### 2026-05-18 01:41 - Agent 音乐执行失败修复（AppleScript 语法纠正 + 错误证据补齐）
 
 - 本次任务：修复“执行失败”且历史只显示 `osascript_failed`、看不到真实错误的问题。
