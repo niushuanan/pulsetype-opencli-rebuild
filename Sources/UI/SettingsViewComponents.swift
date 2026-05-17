@@ -63,11 +63,6 @@ struct HistoryRowView: View {
                 Text(entry.appName)
                     .font(PulseUI.Typography.monospacedMeta)
                     .pulseTertiaryText()
-                if let textProcessingProvider = entry.textProcessingProvider, let textProcessingModel = entry.textProcessingModel {
-                    Text("\(textProcessingProvider) · \(textProcessingModel)")
-                        .font(PulseUI.Typography.monospacedMeta)
-                        .pulseTertiaryText()
-                }
                 Spacer()
                 Button("复制结果") {
                     onCopyPrimary()
