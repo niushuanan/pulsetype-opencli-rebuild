@@ -82,12 +82,32 @@ struct SettingsView: View {
                     "语音输入概览",
                     subtitle: homeInstructionText
                 )
+                homeProductIntroCard
                 metricsGrid
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, PulseUI.Spacing.pageHorizontal)
             .padding(.vertical, PulseUI.Spacing.pageVertical)
         }
+    }
+
+    private var homeProductIntroCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("核心特点")
+                .font(PulseUI.Typography.sectionTitle)
+
+            Label("单键开始/结束说话：轻点触发，按住说话，松开后自动结束。", systemImage: "keyboard")
+                .font(PulseUI.Typography.body)
+            Label("ASR + 文本整理双模型：先转写，再把口述整理成可直接发送的成稿。", systemImage: "waveform.and.magnifyingglass")
+                .font(PulseUI.Typography.body)
+            Label("可切换模型与接口：ASR 和文本处理都能单独配置 Base URL、模型名、密钥。", systemImage: "slider.horizontal.3")
+                .font(PulseUI.Typography.body)
+            Label("历史与统计可追踪：结果可复制、可删除，首页指标实时累计。", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
+                .font(PulseUI.Typography.body)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .pulseCard(cornerRadius: PulseUI.Radius.sectionGroup)
     }
 
     private var historyPage: some View {
