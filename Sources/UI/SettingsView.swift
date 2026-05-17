@@ -152,8 +152,8 @@ struct SettingsView: View {
 
     private var settingsPage: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                pageTitleText("设置", subtitle: "这里只保留快捷键、ASR 和文字处理模型。")
+            VStack(alignment: .leading, spacing: 18) {
+                pageTitleText("设置", subtitle: "只保留快捷键、模型设置和自定义提示词。")
                 hotkeySection
                 providerSection
             }
@@ -196,8 +196,9 @@ struct SettingsView: View {
     }
 
     private var hotkeySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("快捷键", subtitle: hotkeySectionSubtitle)
+        VStack(alignment: .leading, spacing: 14) {
+            Text("快捷键")
+                .font(PulseUI.Typography.sectionTitle)
 
             Picker("开始方式", selection: wakeTriggerModeBinding) {
                 ForEach(HotkeyTriggerMode.allCases) { mode in
@@ -208,15 +209,21 @@ struct SettingsView: View {
             .frame(maxWidth: 260)
 
             if hotkeyStateStore.wakeTriggerMode == .modifierTap {
-                Picker("单键", selection: wakeModifierBinding) {
-                    ForEach(HotkeyModifier.allCases) { modifier in
-                        Text(modifier.displayName).tag(modifier)
+                HStack(spacing: 10) {
+                    Text("单键")
+                        .font(PulseUI.Typography.captionStrong)
+                    Picker("单键", selection: wakeModifierBinding) {
+                        ForEach(HotkeyModifier.allCases) { modifier in
+                            Text(modifier.displayName).tag(modifier)
+                        }
                     }
+                    .frame(maxWidth: 180, alignment: .leading)
+                    .pickerStyle(.menu)
                 }
-                .pickerStyle(.menu)
             } else {
                 HStack {
                     Text("组合键")
+                        .font(PulseUI.Typography.captionStrong)
                     KeyboardShortcuts.Recorder("", name: .wakeSession)
                         .frame(width: 220)
                 }
@@ -236,6 +243,10 @@ struct SettingsView: View {
                     .font(PulseUI.Typography.caption)
                     .foregroundStyle(PulseUI.ColorTokens.warning)
             }
+
+            Text(hotkeySectionSubtitle)
+                .font(PulseUI.Typography.caption)
+                .pulseSecondaryText()
         }
         .padding(16)
         .controlCenterSectionGroup()
@@ -261,34 +272,34 @@ struct SettingsView: View {
 
     private var providerSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            sectionHeader("模型设置", subtitle: "接口地址、模型名和密钥都在这里。")
-            modelEditor(
-                title: "语音识别 ASR",
-                subtitle: "按接口地址自动适配 OpenAI compatible 与 Qwen ASR。",
-                baseURL: Binding(
-                    get: { providerSettingsStore.asrConfig.baseURLString },
-                    set: { providerSettingsStore.updateASRBaseURL($0) }
-                ),
-                modelName: Binding(
-                    get: { providerSettingsStore.asrConfig.modelName },
-                    set: { providerSettingsStore.updateASRModel($0) }
-                ),
-                apiKeyDraft: $providerSettingsStore.asrAPIKeyDraft,
-                credentialState: providerSettingsStore.asrCredentialState,
-                validationMessage: providerSettingsStore.asrConfigurationValidationMessage,
-                latestResult: providerSettingsStore.latestASRTestResult,
-                isTesting: asrTesting,
-                saveAction: { _ = providerSettingsStore.saveASRAPIKeyDraft() },
-                clearAction: { _ = providerSettingsStore.clearASRAPIKey() },
-                testAction: testASRConnection
-            )
+            Text("模型设置")
+                .font(PulseUI.Typography.sectionTitle)
 
-            Divider()
-
-            VStack(alignment: .leading, spacing: 14) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 360), spacing: 12, alignment: .top)],
+                spacing: 12
+            ) {
+                modelEditor(
+                    title: "语音识别 ASR",
+                    baseURL: Binding(
+                        get: { providerSettingsStore.asrConfig.baseURLString },
+                        set: { providerSettingsStore.updateASRBaseURL($0) }
+                    ),
+                    modelName: Binding(
+                        get: { providerSettingsStore.asrConfig.modelName },
+                        set: { providerSettingsStore.updateASRModel($0) }
+                    ),
+                    apiKeyDraft: $providerSettingsStore.asrAPIKeyDraft,
+                    credentialState: providerSettingsStore.asrCredentialState,
+                    validationMessage: providerSettingsStore.asrConfigurationValidationMessage,
+                    latestResult: providerSettingsStore.latestASRTestResult,
+                    isTesting: asrTesting,
+                    saveAction: { _ = providerSettingsStore.saveASRAPIKeyDraft() },
+                    clearAction: { _ = providerSettingsStore.clearASRAPIKey() },
+                    testAction: testASRConnection
+                )
                 modelEditor(
                     title: "文字处理模型",
-                    subtitle: "按接口地址自动适配 OpenAI、Anthropic 与其他 compatible gateway。",
                     baseURL: Binding(
                         get: { providerSettingsStore.textConfig.baseURLString },
                         set: { providerSettingsStore.updateTextBaseURL($0) }
@@ -306,47 +317,45 @@ struct SettingsView: View {
                     clearAction: { _ = providerSettingsStore.clearTextAPIKey() },
                     testAction: testTextConnection
                 )
+            }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("文字处理提示词")
-                        .font(PulseUI.Typography.bodyStrong)
-                    Text("这里改完后，下一次文字整理会直接用新提示词。")
-                        .font(PulseUI.Typography.caption)
-                        .pulseSecondaryText()
+            VStack(alignment: .leading, spacing: 10) {
+                Text("自定义提示词")
+                    .font(PulseUI.Typography.sectionTitle)
+                Text("这里修改后，下一次文字整理会直接生效。")
+                    .font(PulseUI.Typography.caption)
+                    .pulseSecondaryText()
 
-                    TextEditor(text: $providerSettingsStore.textProcessingPrompt)
-                        .font(PulseUI.Typography.body)
-                        .frame(minHeight: 124)
-                        .scrollContentBackground(.hidden)
-                        .padding(8)
-                        .background(
-                            RoundedRectangle(cornerRadius: PulseUI.Radius.card, style: .continuous)
-                                .fill(Color.white.opacity(0.45))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: PulseUI.Radius.card, style: .continuous)
-                                        .stroke(Color.primary.opacity(0.10), lineWidth: 1)
-                                )
-                        )
+                TextEditor(text: $providerSettingsStore.textProcessingPrompt)
+                    .font(PulseUI.Typography.body)
+                    .frame(minHeight: 160)
+                    .scrollContentBackground(.hidden)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: PulseUI.Radius.card, style: .continuous)
+                            .fill(Color.white.opacity(0.45))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: PulseUI.Radius.card, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+                            )
+                    )
 
-                    HStack {
-                        Spacer()
-                        Button("恢复默认提示词") {
-                            providerSettingsStore.textProcessingPrompt = ProviderSettingsStore.defaultTextProcessingPrompt
-                            showToast("默认提示词已恢复。")
-                        }
-                        .controlCenterSecondaryActionButton()
+                HStack {
+                    Spacer()
+                    Button("恢复默认提示词") {
+                        providerSettingsStore.textProcessingPrompt = ProviderSettingsStore.defaultTextProcessingPrompt
+                        showToast("默认提示词已恢复。")
                     }
+                    .controlCenterSecondaryActionButton()
                 }
             }
-            .padding(.top, 2)
+            .padding(16)
+            .controlCenterSectionGroup()
         }
-        .padding(16)
-        .controlCenterSectionGroup()
     }
 
     private func modelEditor(
         title: String,
-        subtitle: String,
         baseURL: Binding<String>,
         modelName: Binding<String>,
         apiKeyDraft: Binding<String>,
@@ -358,16 +367,11 @@ struct SettingsView: View {
         clearAction: @escaping () -> Void,
         testAction: @escaping () -> Void
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(PulseUI.Typography.sectionTitle)
-                Text(subtitle)
-                    .font(PulseUI.Typography.caption)
-                    .pulseSecondaryText()
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(PulseUI.Typography.bodyStrong)
 
-            TextField("Base URL", text: baseURL)
+            TextField("接口地址（Base URL）", text: baseURL)
                 .textFieldStyle(.roundedBorder)
 
             TextField("模型名", text: modelName)
@@ -386,15 +390,11 @@ struct SettingsView: View {
                 .controlCenterSecondaryActionButton()
             }
 
-            HStack {
-                credentialStateLabel(credentialState)
-                Spacer()
-                Button(isTesting ? "测试中" : "测试连接") {
-                    testAction()
-                }
-                .controlCenterPrimaryActionButton()
-                .disabled(isTesting || validationMessage != nil)
+            Button(isTesting ? "测试中" : "测试连接") {
+                testAction()
             }
+            .controlCenterPrimaryActionButton()
+            .disabled(isTesting || validationMessage != nil)
 
             if let validationMessage {
                 Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
@@ -403,54 +403,28 @@ struct SettingsView: View {
             }
 
             if let latestResult {
-                connectionResultView(latestResult)
+                connectionResultCompactView(latestResult)
+            }
+
+            if credentialState == .saved {
+                Text("密钥已保存")
+                    .font(PulseUI.Typography.caption)
+                    .foregroundStyle(PulseUI.ColorTokens.success)
             }
         }
+        .padding(14)
+        .controlCenterSectionGroup(cornerRadius: 12)
     }
 
-    private func connectionResultView(_ result: ConnectionTestResult) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func connectionResultCompactView(_ result: ConnectionTestResult) -> some View {
+        HStack(spacing: 6) {
             Label(
                 result.message,
                 systemImage: result.status == .success ? "checkmark.circle.fill" : "xmark.octagon.fill"
             )
-            .font(PulseUI.Typography.captionStrong)
-            .foregroundStyle(result.status == .success ? PulseUI.ColorTokens.success : PulseUI.ColorTokens.danger)
-
-            Text(result.status == .success ? result.hint : ConnectionFailureAdvisor.suggestion(for: result))
-                .font(PulseUI.Typography.caption)
-                .pulseSecondaryText()
-        }
-        .padding(10)
-        .controlCenterInsetPanel()
-    }
-
-    private func credentialStateLabel(_ state: ProviderSettingsStore.CredentialState) -> some View {
-        let text: String
-        let color: Color
-        switch state {
-        case .unknown:
-            text = "密钥状态未知"
-            color = PulseUI.ColorTokens.textSecondary
-        case .missing:
-            text = "未保存密钥"
-            color = PulseUI.ColorTokens.warning
-        case .saving:
-            text = "正在保存"
-            color = PulseUI.ColorTokens.warning
-        case .saved:
-            text = "密钥已保存"
-            color = PulseUI.ColorTokens.success
-        case .inaccessible:
-            text = "密钥不可读取"
-            color = PulseUI.ColorTokens.danger
-        case .failed:
-            text = "密钥状态异常"
-            color = PulseUI.ColorTokens.danger
-        }
-        return Label(text, systemImage: "key")
             .font(PulseUI.Typography.caption)
-            .foregroundStyle(color)
+            .foregroundStyle(result.status == .success ? PulseUI.ColorTokens.success : PulseUI.ColorTokens.danger)
+        }
     }
 
     private func pageTitleText(_ title: String, subtitle: String? = nil) -> some View {
