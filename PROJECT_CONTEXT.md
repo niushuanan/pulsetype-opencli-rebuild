@@ -33,6 +33,23 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 01:37 - Agent 音乐下一首乱跳修复（队列旋转锁定 + 匹配校验纠偏）
+
+- 本次任务：修复“播放指定歌曲后，下一首会跳到陌生歌曲”的问题，并定位证据校验误判。
+- 改了哪些文件：
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - `runPlay(query:)` 从“直接播放资料库单曲”改为“可复用的旋转队列播放列表”策略：先在资料库定位目标曲目，再优先复用 `PulseType Agent Library Queue`（曲目总数一致时），否则按目标曲目起点重建完整队列并播放。
+  - 执行证据新增 `queue_mode=playlist_rotation`、`queue_reused=true/false`、`album` 等字段，便于判断是否命中复用路径和实际播放结果。
+  - 修复 `exact_match` 误判：匹配校验只基于 `track/artist/album`，不再把 `requested_track` 和整段 evidence 文本拼进去，避免“播错歌却仍判定命中”。
+- 为什么这样改：
+  - 单纯 `play library playlist + play track` 不能稳定锁住后续队列，Music 仍可能按当前上下文跳转。
+  - 旋转队列能把“下一首”固定在资料库顺序里，符合“先从资料库找到歌，再沿资料库继续播”的预期。
+  - 校验误判会掩盖真实播放偏差，必须先修正才能让历史证据可信。
+- 影响了哪些模块：
+  - Agent 音乐执行器 AppleScript 播放策略、播放结果证据结构、命中验证逻辑、历史可观测性。
+
 ### 2026-05-18 01:27 - Agent 音乐链路增强（自动拉起 Music + 同键轻点/长按分流 + 资料库顺序锚定）
 
 - 本次任务：按最新反馈修复三件事：Music 未打开时执行失败、开始键与 Agent 键不能复用、播放指定歌曲后下一首容易偏离资料库顺序。
