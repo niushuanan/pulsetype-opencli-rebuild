@@ -145,6 +145,14 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - 为什么这样改：用户希望按钮与左侧目录选中态统一，不接受默认系统灰按钮和普通蓝按钮的观感差异。
 - 影响了哪些模块：设置页模型配置区和提示词区按钮视觉表现（不影响保存密钥、删除密钥、测试连接与提示词恢复逻辑）。
 
+### 2026-05-17 23:08 - 按钮颜色改为侧栏同源系统语义色
+
+- 本次任务：按“1:1 模仿”要求，把设置页按钮颜色改为与侧栏选中态同源的系统色，而非手调蓝色。
+- 改了哪些文件：`Sources/UI/SettingsView.swift`
+- 改了什么：`SettingsSidebarSelectionButtonStyle` 不再使用 `controlAccentColor` 渐变，改为直接使用 `selectedContentBackgroundColor / unemphasizedSelectedContentBackgroundColor` 作为底色，文字使用 `alternateSelectedControlTextColor / labelColor`，并保留禁用态。
+- 为什么这样改：要做到视觉一致，必须复用系统语义色，而不是“接近”的自定义配色。
+- 影响了哪些模块：设置页按钮在激活窗口/非激活窗口下的配色一致性（不影响业务功能）。
+
 ### 2026-05-17 20:50 - 首页卡片高度按指定值压到 84
 
 - 本次任务：按反馈把首页统计卡片高度直接压到指定数值 84。

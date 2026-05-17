@@ -590,39 +590,41 @@ private extension View {
 
 private struct SettingsSidebarSelectionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.controlActiveState) private var controlActiveState
 
     func makeBody(configuration: Configuration) -> some View {
-        let accent = Color(nsColor: .controlAccentColor)
-        let fill: LinearGradient = isEnabled
-            ? LinearGradient(
-                colors: [
-                    accent.opacity(0.98),
-                    accent.opacity(0.90)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+        let isActive = controlActiveState == .key || controlActiveState == .active
+        let fillColor: Color
+        let textColor: Color
+
+        if isEnabled {
+            fillColor = Color(
+                nsColor: isActive
+                    ? .selectedContentBackgroundColor
+                    : .unemphasizedSelectedContentBackgroundColor
             )
-            : LinearGradient(
-                colors: [
-                    Color.primary.opacity(0.08),
-                    Color.primary.opacity(0.08)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+            textColor = Color(
+                nsColor: isActive
+                    ? .alternateSelectedControlTextColor
+                    : .labelColor
             )
+        } else {
+            fillColor = Color(nsColor: .quaternaryLabelColor)
+            textColor = Color(nsColor: .secondaryLabelColor)
+        }
 
         return configuration.label
             .font(PulseUI.Typography.bodyStrong)
-            .foregroundStyle(isEnabled ? Color.white : Color.primary.opacity(0.45))
+            .foregroundStyle(textColor)
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(fill)
+                    .fill(fillColor)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(isEnabled ? Color.white.opacity(0.18) : Color.primary.opacity(0.10), lineWidth: 1)
+                    .stroke(Color.black.opacity(isEnabled ? 0.06 : 0.03), lineWidth: 1)
             )
             .opacity(configuration.isPressed && isEnabled ? 0.90 : 1.0)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
