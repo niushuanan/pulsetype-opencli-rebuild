@@ -33,6 +33,23 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 14:40 - clock 时间识别回归到模型补全，不再走本地解析
+
+- 本次任务：按用户要求移除本地中文时间解析，定位并修复“模型缺失 fire_at 时时间错误”的根因。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 删除本地中文时间解析分支（今天/明天/下午五点二十等规则）。
+  - 新增“二次模型补全 fire_at”流程：首次 JSON 缺 `fire_at` 时，发起专门的时间提取请求，只返回 `fire_at`。
+  - 强化主提取请求 token 上限，降低字段被截断概率。
+  - 新增测试 `testClockParameterExtractorRecoversFireAtBySecondModelCallWhenMissing`，确认缺失场景由第二次模型调用补全时间。
+- 为什么这样改：
+  - 用户明确要求不要本地解析，要回到“模型应识别完整时间”的设计原则。
+- 影响了哪些模块：
+  - Agent clock 参数提取流程、模型补救策略、clock 时间识别回归覆盖。
+
 ### 2026-05-18 14:35 - 修复 clock 在中文时间口令下误用当前时间
 
 - 本次任务：修复“说今天下午五点二十，但实际按当前时刻创建闹钟”的时间判定 bug。
