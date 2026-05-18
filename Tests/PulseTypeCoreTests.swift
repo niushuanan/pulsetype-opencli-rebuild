@@ -56,6 +56,15 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertFalse(AgentCapabilitySettings.isMusicControlEnabled(defaults: defaults))
     }
 
+    func testAgentCalendarCapabilityDefaultsToEnabledAndCanBeTurnedOff() {
+        let defaults = makeDefaults()
+
+        XCTAssertTrue(AgentCapabilitySettings.isCalendarCreateEventEnabled(defaults: defaults))
+
+        defaults.set(false, forKey: AgentCapabilitySettings.calendarCreateEventEnabledKey)
+        XCTAssertFalse(AgentCapabilitySettings.isCalendarCreateEventEnabled(defaults: defaults))
+    }
+
     func testHistoryStoreKeepsSupportedModesFromOldFiles() throws {
         let directory = makeTemporaryDirectory()
         let file = directory.appendingPathComponent("session-history-v2.json")
@@ -257,6 +266,93 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertTrue(outcome.evidenceSummary.contains("agent.route"))
     }
 
+    func testCalendarParameterExtractorParsesModelJSON() async throws {
+        let extractor = LLMAgentCalendarParameterExtractor(
+            generationProvider: FakeTextGenerationProvider(
+                output: """
+                {
+                  "title": "项目会议",
+                  "start_at": "2026-05-23T09:00:00+08:00",
+                  "end_at": "2026-05-23T10:00:00+08:00",
+                  "calendar": null,
+                  "location": "",
+                  "notes": "",
+                  "alarm_minutes_before": 10,
+                  "needs_confirmation": false,
+                  "confirmation_question": null
+                }
+                """
+            )
+        )
+
+        let result = try await extractor.extract(
+            request: AgentCalendarParameterExtractionRequest(
+                command: "我下周六九点有个会",
+                referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
+                timeZone: TimeZone(identifier: "Asia/Shanghai")!
+            ),
+            configuration: makeTextGenerationConfiguration(),
+            apiKey: "text-key-123456"
+        )
+
+        XCTAssertEqual(result.title, "项目会议")
+        XCTAssertEqual(result.startAtISO8601, "2026-05-23T09:00:00+08:00")
+        XCTAssertEqual(result.endAtISO8601, "2026-05-23T10:00:00+08:00")
+        XCTAssertEqual(result.alarmMinutesBefore, 10)
+        XCTAssertFalse(result.needsConfirmation)
+    }
+
+    func testCalendarExecutorCreatesEventAfterModelParameterExtraction() async throws {
+        let scriptRunner = FakeAgentCalendarScriptRunner(
+            result: AgentCalendarScriptResult(
+                exitCode: 0,
+                stdout: "event_created|calendar=工作|uid=event-1|summary=项目会议",
+                stderr: ""
+            )
+        )
+        let executor = AgentCalendarCreateEventExecutor(
+            parameterExtractor: LLMAgentCalendarParameterExtractor(
+                generationProvider: FakeTextGenerationProvider(
+                    output: """
+                    {
+                      "title": "项目会议",
+                      "start_at": "2026-05-23T09:00:00+08:00",
+                      "end_at": "2026-05-23T10:00:00+08:00",
+                      "calendar": "工作",
+                      "location": "会议室 A",
+                      "notes": "讨论排期",
+                      "alarm_minutes_before": 10,
+                      "needs_confirmation": false,
+                      "confirmation_question": null
+                    }
+                    """
+                )
+            ),
+            scriptRunner: scriptRunner
+        )
+
+        let outcome = await executor.execute(
+            AgentCalendarExecutionRequest(
+                traceID: "trace-calendar",
+                command: "我下周六九点有个项目会议",
+                referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
+                timeZone: TimeZone(identifier: "Asia/Shanghai")!
+            ),
+            configuration: makeTextGenerationConfiguration(),
+            apiKey: "text-key-123456"
+        )
+
+        XCTAssertEqual(outcome.status, .success)
+        XCTAssertEqual(outcome.outputText, "已创建日程：项目会议。")
+        XCTAssertEqual(scriptRunner.createdSpecs.first?.title, "项目会议")
+        XCTAssertEqual(scriptRunner.createdSpecs.first?.calendarName, "工作")
+        XCTAssertEqual(scriptRunner.createdSpecs.first?.location, "会议室 A")
+        XCTAssertEqual(scriptRunner.createdSpecs.first?.notes, "讨论排期")
+        XCTAssertEqual(scriptRunner.createdSpecs.first?.alarmMinutesBefore, 10)
+        XCTAssertTrue(outcome.evidenceSummary.contains("apple.calendar.create_event"))
+        XCTAssertTrue(outcome.evidenceSummary.contains("verification=created"))
+    }
+
     func testInteractionCoordinatorRoutesAgentCommandBeforeExecutingMusicTool() async throws {
         let directory = makeTemporaryDirectory()
         let credentials = MemoryCredentialStore()
@@ -309,6 +405,60 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(historyStore.entries.first?.textProcessingModel, "deepseek-v4-flash")
         XCTAssertTrue(historyStore.entries.first?.agentEvidenceSummary?.contains("agent.route") == true)
         XCTAssertTrue(historyStore.entries.first?.agentEvidenceSummary?.contains("apple.music.control|fake=true") == true)
+        XCTAssertEqual(sessionStore.phase, .idle)
+    }
+
+    func testInteractionCoordinatorRoutesCalendarCommandBeforeExecutingCalendarTool() async throws {
+        let directory = makeTemporaryDirectory()
+        let credentials = MemoryCredentialStore()
+        try credentials.saveAPIKey("asr-key-123456", for: defaultASRCredentialKeyRef)
+        try credentials.saveAPIKey("text-key-123456", for: defaultTextCredentialKeyRef)
+
+        let sessionStore = SessionStore()
+        let historyStore = LocalHistoryStore(historyDirectory: directory.appendingPathComponent("History"))
+        let router = FakeAgentToolRouter(toolID: AgentCapabilitySettings.calendarCreateEventToolID)
+        let calendarExecutor = FakeAgentCalendarExecutor(
+            outcome: AgentCalendarExecutionOutcome(
+                status: .success,
+                message: "已创建日程：项目会议。",
+                outputText: "已创建日程：项目会议。",
+                evidenceSummary: "apple.calendar.create_event|fake=true"
+            )
+        )
+        let coordinator = InteractionCoordinator(
+            sessionStore: sessionStore,
+            permissionsCenter: PermissionsCenter(
+                microphoneStateResolver: { .granted },
+                accessibilityStateResolver: { .granted }
+            ),
+            audioCaptureService: FakeAudioCaptureService(directory: directory),
+            providerSettingsStore: ProviderSettingsStore(
+                defaults: makeDefaults(),
+                credentialStore: credentials
+            ),
+            providerRegistry: SpeechProviderRegistry(providers: [FakeTranscriptionProvider()]),
+            textOutputCoordinator: FakeTextOutputCoordinator(),
+            contextDetector: FixedContextDetector(),
+            localHistoryStore: historyStore,
+            speechPipelineLogger: SpeechPipelineLogger(diagnosticsDirectory: directory.appendingPathComponent("Diagnostics")),
+            dictationPostProcessor: FakeDictationPostProcessor(output: "不会走普通听写整理"),
+            agentRouter: router,
+            agentToolCatalog: FakeAgentToolCatalog(tools: [Self.calendarToolManifest]),
+            agentCalendarExecutor: calendarExecutor
+        )
+
+        coordinator.handleWakeInput(context: .agentHold)
+        coordinator.handleWakeInput(context: .agentHold)
+
+        try await waitUntil { historyStore.entries.count == 1 }
+        XCTAssertEqual(router.requests.first?.command, "ASR 原文")
+        XCTAssertEqual(calendarExecutor.requests.first?.command, "ASR 原文")
+        XCTAssertEqual(historyStore.entries.first?.mode, .agent)
+        XCTAssertEqual(historyStore.entries.first?.status, .success)
+        XCTAssertEqual(historyStore.entries.first?.outputText, "已创建日程：项目会议。")
+        XCTAssertEqual(historyStore.entries.first?.textProcessingModel, "deepseek-v4-flash")
+        XCTAssertTrue(historyStore.entries.first?.agentEvidenceSummary?.contains("agent.route") == true)
+        XCTAssertTrue(historyStore.entries.first?.agentEvidenceSummary?.contains("apple.calendar.create_event|fake=true") == true)
         XCTAssertEqual(sessionStore.phase, .idle)
     }
 
@@ -414,6 +564,13 @@ final class PulseTypeCoreTests: XCTestCase {
         displayName: "音乐控制",
         description: "控制 Apple Music 播放、暂停、继续和切歌。",
         examples: ["播放稻香", "下一首"]
+    )
+
+    private static let calendarToolManifest = AgentToolManifest(
+        toolID: AgentCapabilitySettings.calendarCreateEventToolID,
+        displayName: "日历日程",
+        description: "在 Calendar 创建会议、约会、行程等日程。",
+        examples: ["我下周六九点有个会", "明天下午三点安排项目讨论"]
     )
 
     private func waitUntil(
@@ -604,6 +761,20 @@ final class FakeTextGenerationProvider: TextGenerationProvider, @unchecked Senda
     }
 }
 
+final class FakeAgentCalendarScriptRunner: AgentCalendarScriptRunning, @unchecked Sendable {
+    private(set) var createdSpecs: [AgentCalendarEventSpec] = []
+    private let result: AgentCalendarScriptResult
+
+    init(result: AgentCalendarScriptResult) {
+        self.result = result
+    }
+
+    func createEvent(_ spec: AgentCalendarEventSpec) async -> AgentCalendarScriptResult {
+        createdSpecs.append(spec)
+        return result
+    }
+}
+
 @MainActor
 final class FakeAgentToolCatalog: AgentToolCatalogProviding {
     private let tools: [AgentToolManifest]
@@ -660,6 +831,32 @@ final class FakeAgentMusicExecutor: AgentMusicControlling {
     }
 
     func execute(_ request: AgentMusicExecutionRequest) async -> AgentMusicExecutionOutcome {
+        requests.append(request)
+        return outcome
+    }
+}
+
+@MainActor
+final class FakeAgentCalendarExecutor: AgentCalendarControlling {
+    private(set) var requests: [AgentCalendarExecutionRequest] = []
+    private let outcome: AgentCalendarExecutionOutcome
+
+    init(
+        outcome: AgentCalendarExecutionOutcome = AgentCalendarExecutionOutcome(
+            status: .success,
+            message: "已创建日程。",
+            outputText: "已创建日程。",
+            evidenceSummary: "apple.calendar.create_event|fake=true"
+        )
+    ) {
+        self.outcome = outcome
+    }
+
+    func execute(
+        _ request: AgentCalendarExecutionRequest,
+        configuration _: TextGenerationProviderConfiguration,
+        apiKey _: String
+    ) async -> AgentCalendarExecutionOutcome {
         requests.append(request)
         return outcome
     }

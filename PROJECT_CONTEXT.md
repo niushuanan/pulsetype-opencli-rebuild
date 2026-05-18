@@ -33,6 +33,37 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 11:20 - Agent 新增 Calendar 日程工具，只创建日历事件
+
+- 本次任务：在现有 Agent Router 框架里新增 `apple.calendar.create_event` 工具，只做 Calendar 日程，不做 Reminder。
+- 改了哪些文件：
+  - `Sources/Core/AgentCalendar/AgentCalendarExecutor.swift`
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `Sources/Core/Interaction/InteractionCoordinator.swift`
+  - `Sources/Core/Session/InputLane.swift`
+  - `Sources/Core/Session/SessionStore.swift`
+  - `Sources/UI/SettingsView.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `project.yml`
+  - `PulseType.xcodeproj/project.pbxproj`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 新增 `AgentCalendarCreateEventExecutor`：工具内部先调用文字处理/Agent 执行模型，把自然语言日程口令标准化为 JSON 参数，再用 AppleScript 调用 Calendar 创建事件。
+  - Calendar 参数提取 prompt 明确限制模型只输出 JSON，不输出 AppleScript、不解释；默认创建 Calendar 事件，不创建 Reminder；如果没有结束时间，默认 1 小时。
+  - 新增 `AgentCalendarEventSpec` 与 AppleScript runner：在 Swift 侧校验标题、开始/结束时间、日历名、地点、备注、提前提醒分钟，再把确定参数传给 `osascript`。
+  - `AgentToolCatalogStore` 增加内置 Calendar manifest，并将“音乐控制”和“日历日程”都写入 `Application Support/PulseType/AgentTools/<tool_id>/manifest.json`；Agent 页开关决定对应工具是否进入 Router 候选列表。
+  - `InteractionCoordinator` 的 Agent 分发从只支持音乐，扩展为按 Router 返回的 `tool_id` 分发到音乐或 Calendar executor；历史证据会同时记录 `agent.route` 和具体工具证据。
+  - Agent 页面保持极简：标题说明下面只有功能列表开关，新增“日历日程”一行，右侧使用 macOS 原生 switch。
+  - 首页、历史、HUD 等文案从“Agent 音乐”调整为更通用的“Agent 执行”，避免和后续多工具能力冲突。
+  - `project.yml` 更新 Apple Events 权限说明，包含 Apple Music 与 Calendar 等 Agent 功能；重新生成 Xcode 工程以纳入新增源码。
+  - 新增测试覆盖 Calendar 能力开关、模型 JSON 参数解析、Calendar executor 组装事件并写证据、Router 分发到 Calendar executor。
+- 为什么这样改：
+  - Router 仍然只做分流，只输出 `tool_id`；Calendar 的时间标准化、字段校验、AppleScript 执行和结果证据都留在工具内部，职责边界清楚。
+  - 日程创建比音乐播放更依赖时间理解，所以 Calendar 工具内部需要第二次模型调用，但输出必须被限制成稳定 JSON，不能让模型直接生成可执行脚本。
+  - 前端只让用户看到“这个功能是否启用”，不暴露复杂路由和参数细节。
+- 影响了哪些模块：
+  - Agent Router 候选工具目录、Agent 执行分发、Calendar AppleScript 执行链路、Agent 页开关、首页/历史/HUD 文案、核心单测集合、应用自动化权限说明。
+
 ### 2026-05-18 10:24 - Agent 接入 LLM Router，只让路由决定 tool_id
 
 - 本次任务：把 Agent 从“ASR 后直接执行音乐”改成“ASR 后先走 LLM Router，再按 `tool_id` 分发到工具执行器”，前端页面保持不变。

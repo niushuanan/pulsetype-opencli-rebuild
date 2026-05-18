@@ -187,7 +187,7 @@ final class SessionStore: ObservableObject {
         clearRuntimeArtifactsForNewSession()
         phase = .cancelled
         statusMessage = lane == .agentMusic
-            ? "本次 Agent 执行已取消，Music 不会再继续处理。"
+            ? "本次 Agent 执行已取消，对应功能不会再继续处理。"
             : "本次听写已取消，目标应用内容未变化。"
         hudProgressHint = SessionHUDProgressHint.idle
     }

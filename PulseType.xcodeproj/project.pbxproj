@@ -51,6 +51,7 @@
 		D7565185FDA605CB6CEBFB93 /* AudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE6A00315A23BF62DC01AEC6 /* AudioCaptureService.swift */; };
 		E4AAEBBCFE13544B1223300E /* KeychainProviderCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157337AD796A00BA0C88EF3E /* KeychainProviderCredentialStore.swift */; };
 		E9B4D93689282E00BED565F5 /* InputLane.swift in Sources */ = {isa = PBXBuildFile; fileRef = E80D1E1D6D632A257088DD03 /* InputLane.swift */; };
+		EC6AF53399F665B75EA481BB /* AgentCalendarExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF223954E9768CCE66ABA671 /* AgentCalendarExecutor.swift */; };
 		F053B05364A41E8CFED867FE /* HUDProgressStateMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DB53775515DD185FA1EEA89 /* HUDProgressStateMachineTests.swift */; };
 		F57261A299062CC639BFBBA2 /* ControlCenterVisualSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8517DB5F2D41A876738F6378 /* ControlCenterVisualSystem.swift */; };
 		FD46E29D44B77B9A97D545B8 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D8F2B65D755716CA52CB285 /* AppModel.swift */; };
@@ -114,6 +115,7 @@
 		C7AACAD05F67BBE70749EFCB /* LocalHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHistoryStore.swift; sourceTree = "<group>"; };
 		CA0007EF478F376F9F4AA27C /* SpeechProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechProvider.swift; sourceTree = "<group>"; };
 		CEE9D1B6AD35D4FEE8C8C42D /* HotkeyNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyNames.swift; sourceTree = "<group>"; };
+		CF223954E9768CCE66ABA671 /* AgentCalendarExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCalendarExecutor.swift; sourceTree = "<group>"; };
 		D2263494F2431C0E6A4D09D5 /* DictationPostProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationPostProcessor.swift; sourceTree = "<group>"; };
 		D9D6113DB9FD87EB75D2DC65 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		DD4B5487FB8F3196B11F7169 /* SpeechProviderRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechProviderRegistry.swift; sourceTree = "<group>"; };
@@ -207,6 +209,14 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		4A90B970B48F738B700C0623 /* AgentCalendar */ = {
+			isa = PBXGroup;
+			children = (
+				CF223954E9768CCE66ABA671 /* AgentCalendarExecutor.swift */,
+			);
+			path = AgentCalendar;
+			sourceTree = "<group>";
+		};
 		548AD82FCA6BE7AEA44AE94D /* Storage */ = {
 			isa = PBXGroup;
 			children = (
@@ -261,6 +271,7 @@
 		982342CCD3F75DE108A60706 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				4A90B970B48F738B700C0623 /* AgentCalendar */,
 				D77E6762D4BE854DD0B305EB /* Audio */,
 				F9E8A261F7EED0E04F6E680F /* Context */,
 				ED48F905002E6AE0DBDE7853 /* Diagnostics */,
@@ -468,6 +479,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EC6AF53399F665B75EA481BB /* AgentCalendarExecutor.swift in Sources */,
 				8F82F460B556E143E651AE5D /* AppDelegate.swift in Sources */,
 				FD46E29D44B77B9A97D545B8 /* AppModel.swift in Sources */,
 				0BFF36E08E600A3BF576CB58 /* AppRuntimePolicy.swift in Sources */,
@@ -545,7 +557,7 @@
 				INFOPLIST_KEY_CFBundleIconFile = AppIcon;
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_LSUIElement = NO;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "PulseType 需要自动化权限，用于把文本写入到其他应用。";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "PulseType 需要自动化权限，用于把文本写入到其他应用，以及执行 Apple Music 和 Calendar 等 Agent 功能。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PulseType 会在你开始普通听写时录音，用于 ASR 转写与文字模型整理。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -727,7 +739,7 @@
 				INFOPLIST_KEY_CFBundleIconFile = AppIcon;
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_LSUIElement = NO;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "PulseType 需要自动化权限，用于把文本写入到其他应用。";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "PulseType 需要自动化权限，用于把文本写入到其他应用，以及执行 Apple Music 和 Calendar 等 Agent 功能。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PulseType 会在你开始普通听写时录音，用于 ASR 转写与文字模型整理。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

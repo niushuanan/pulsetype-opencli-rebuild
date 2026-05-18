@@ -3,13 +3,22 @@ import Foundation
 
 enum AgentCapabilitySettings {
     static let musicControlEnabledKey = "agent.capability.music.enabled.v1"
+    static let calendarCreateEventEnabledKey = "agent.capability.calendar.create_event.enabled.v1"
     static let musicControlToolID = "apple.music.control"
+    static let calendarCreateEventToolID = "apple.calendar.create_event"
 
     static func isMusicControlEnabled(defaults: UserDefaults = .standard) -> Bool {
         guard defaults.object(forKey: musicControlEnabledKey) != nil else {
             return true
         }
         return defaults.bool(forKey: musicControlEnabledKey)
+    }
+
+    static func isCalendarCreateEventEnabled(defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: calendarCreateEventEnabledKey) != nil else {
+            return true
+        }
+        return defaults.bool(forKey: calendarCreateEventEnabledKey)
     }
 }
 
@@ -54,7 +63,8 @@ final class AgentToolCatalogStore: AgentToolCatalogProviding {
         bootstrapBuiltInToolsIfNeeded()
 
         var manifestsByID: [String: AgentToolManifest] = [
-            Self.musicManifest.toolID: Self.musicManifest
+            Self.musicManifest.toolID: Self.musicManifest,
+            Self.calendarCreateEventManifest.toolID: Self.calendarCreateEventManifest
         ]
 
         let toolDirectories = (try? fileManager.contentsOfDirectory(
@@ -86,23 +96,22 @@ final class AgentToolCatalogStore: AgentToolCatalogProviding {
     private func bootstrapBuiltInToolsIfNeeded() {
         try? fileManager.createDirectory(at: toolsDirectory, withIntermediateDirectories: true)
 
-        let musicDirectory = toolsDirectory.appendingPathComponent(
-            AgentCapabilitySettings.musicControlToolID,
-            isDirectory: true
-        )
-        let manifestURL = musicDirectory.appendingPathComponent("manifest.json", isDirectory: false)
-        guard !fileManager.fileExists(atPath: manifestURL.path) else {
-            return
-        }
+        for manifest in Self.builtInManifests {
+            let toolDirectory = toolsDirectory.appendingPathComponent(manifest.toolID, isDirectory: true)
+            let manifestURL = toolDirectory.appendingPathComponent("manifest.json", isDirectory: false)
+            guard !fileManager.fileExists(atPath: manifestURL.path) else {
+                continue
+            }
 
-        do {
-            try fileManager.createDirectory(at: musicDirectory, withIntermediateDirectories: true)
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(Self.musicManifest)
-            try data.write(to: manifestURL, options: [.atomic])
-        } catch {
-            // 写入失败不影响运行，内置 manifest 会作为内存兜底继续参与路由。
+            do {
+                try fileManager.createDirectory(at: toolDirectory, withIntermediateDirectories: true)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(manifest)
+                try data.write(to: manifestURL, options: [.atomic])
+            } catch {
+                // 写入失败不影响运行，内置 manifest 会作为内存兜底继续参与路由。
+            }
         }
     }
 
@@ -110,6 +119,8 @@ final class AgentToolCatalogStore: AgentToolCatalogProviding {
         switch toolID {
         case AgentCapabilitySettings.musicControlToolID:
             return AgentCapabilitySettings.isMusicControlEnabled(defaults: defaults)
+        case AgentCapabilitySettings.calendarCreateEventToolID:
+            return AgentCapabilitySettings.isCalendarCreateEventEnabled(defaults: defaults)
         default:
             return true
         }
@@ -137,6 +148,22 @@ final class AgentToolCatalogStore: AgentToolCatalogProviding {
             "下一首"
         ]
     )
+
+    private static let calendarCreateEventManifest = AgentToolManifest(
+        toolID: AgentCapabilitySettings.calendarCreateEventToolID,
+        displayName: "日历日程",
+        description: "在 Calendar 创建会议、约会、行程等日程。适合“我下周六九点有个会”“明天下午三点安排项目讨论”。",
+        examples: [
+            "我下周六九点有个会",
+            "明天下午三点安排项目讨论",
+            "九点有个会，帮我放到日历里"
+        ]
+    )
+
+    private static let builtInManifests = [
+        musicManifest,
+        calendarCreateEventManifest
+    ]
 }
 
 struct AgentRouteRequest: Equatable {

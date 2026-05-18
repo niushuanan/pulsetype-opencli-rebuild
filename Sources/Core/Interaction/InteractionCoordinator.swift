@@ -18,6 +18,7 @@ final class InteractionCoordinator {
     private let agentRouter: any AgentToolRouting
     private let agentToolCatalog: any AgentToolCatalogProviding
     private let agentMusicExecutor: any AgentMusicControlling
+    private let agentCalendarExecutor: any AgentCalendarControlling
 
     private var cancellables = Set<AnyCancellable>()
     private var transcriptionTask: Task<Void, Never>?
@@ -39,7 +40,8 @@ final class InteractionCoordinator {
         dictationPostProcessor: DictationPostProcessor = LLMDictationPostProcessor(),
         agentRouter: (any AgentToolRouting)? = nil,
         agentToolCatalog: (any AgentToolCatalogProviding)? = nil,
-        agentMusicExecutor: (any AgentMusicControlling)? = nil
+        agentMusicExecutor: (any AgentMusicControlling)? = nil,
+        agentCalendarExecutor: (any AgentCalendarControlling)? = nil
     ) {
         self.sessionStore = sessionStore
         self.permissionsCenter = permissionsCenter
@@ -55,6 +57,7 @@ final class InteractionCoordinator {
         self.agentRouter = agentRouter ?? LLMAgentToolRouter()
         self.agentToolCatalog = agentToolCatalog ?? AgentToolCatalogStore()
         self.agentMusicExecutor = agentMusicExecutor ?? AgentMusicControlExecutor()
+        self.agentCalendarExecutor = agentCalendarExecutor ?? AgentCalendarCreateEventExecutor()
         bindListeningLevel()
         bindExternalAppTracking()
     }
@@ -594,7 +597,45 @@ final class InteractionCoordinator {
             transcriptLength: transcription.transcript.count
         )
 
-        guard routeOutcome.toolID == AgentCapabilitySettings.musicControlToolID else {
+        let routedToolName = enabledTools.first(where: { $0.toolID == routeOutcome.toolID })?.displayName ?? "Agent 功能"
+        sessionStore.markAgentExecuting(toolName: routedToolName)
+
+        let outcomeStatus: SessionHistoryStatus
+        let outcomeMessage: String
+        let outcomeOutputText: String?
+        let outcomeEvidenceSummary: String
+        let logStagePrefix: String
+
+        switch routeOutcome.toolID {
+        case AgentCapabilitySettings.musicControlToolID:
+            let outcome = await agentMusicExecutor.execute(
+                AgentMusicExecutionRequest(
+                    traceID: traceID,
+                    command: commandText
+                )
+            )
+            outcomeStatus = outcome.status
+            outcomeMessage = outcome.message
+            outcomeOutputText = outcome.outputText
+            outcomeEvidenceSummary = outcome.evidenceSummary
+            logStagePrefix = "agent.music"
+
+        case AgentCapabilitySettings.calendarCreateEventToolID:
+            let outcome = await agentCalendarExecutor.execute(
+                AgentCalendarExecutionRequest(
+                    traceID: traceID,
+                    command: commandText
+                ),
+                configuration: routeConfiguration,
+                apiKey: routeAPIKey
+            )
+            outcomeStatus = outcome.status
+            outcomeMessage = outcome.message
+            outcomeOutputText = outcome.outputText
+            outcomeEvidenceSummary = outcome.evidenceSummary
+            logStagePrefix = "agent.calendar"
+
+        default:
             let message = AgentRouteError.unknownToolID(routeOutcome.toolID).localizedDescription
             finishAgentFailure(
                 message: message,
@@ -610,29 +651,20 @@ final class InteractionCoordinator {
             return
         }
 
-        let routedToolName = enabledTools.first(where: { $0.toolID == routeOutcome.toolID })?.displayName ?? "音乐控制"
-        sessionStore.markAgentExecuting(toolName: routedToolName)
-        let outcome = await agentMusicExecutor.execute(
-            AgentMusicExecutionRequest(
-                traceID: traceID,
-                command: commandText
-            )
-        )
-
         localHistoryStore.append(
             SessionHistoryEntry(
                 mode: .agent,
                 appName: focusContext.appName,
                 bundleID: focusContext.bundleID,
                 inputText: transcription.transcript,
-                outputText: outcome.outputText,
+                outputText: outcomeOutputText,
                 transcriptionProvider: transcription.providerName,
                 transcriptionModel: transcription.modelName,
                 textProcessingProvider: routeOutcome.providerName,
                 textProcessingModel: routeOutcome.modelName,
-                agentEvidenceSummary: [routeOutcome.evidenceSummary, outcome.evidenceSummary].joined(separator: "\n"),
-                status: outcome.status,
-                errorMessage: outcome.status == .failed ? outcome.message : nil,
+                agentEvidenceSummary: [routeOutcome.evidenceSummary, outcomeEvidenceSummary].joined(separator: "\n"),
+                status: outcomeStatus,
+                errorMessage: outcomeStatus == .failed ? outcomeMessage : nil,
                 audioDurationSeconds: audioDurationSeconds
             )
         )
@@ -643,16 +675,16 @@ final class InteractionCoordinator {
             provider: transcription.providerName,
             model: transcription.modelName,
             httpStatus: nil,
-            stage: outcome.status == .success ? "agent.music.success" : "agent.music.failed",
-            detail: [routeOutcome.evidenceSummary, outcome.evidenceSummary].joined(separator: "\n"),
+            stage: outcomeStatus == .success ? "\(logStagePrefix).success" : "\(logStagePrefix).failed",
+            detail: [routeOutcome.evidenceSummary, outcomeEvidenceSummary].joined(separator: "\n"),
             audioDuration: audioDurationSeconds,
             transcriptLength: transcription.transcript.count
         )
 
-        if outcome.status == .success {
-            sessionStore.completeAgentExecution(message: outcome.message)
+        if outcomeStatus == .success {
+            sessionStore.completeAgentExecution(message: outcomeMessage)
         } else {
-            sessionStore.fail(message: outcome.message)
+            sessionStore.fail(message: outcomeMessage)
         }
         currentTraceID = nil
     }
