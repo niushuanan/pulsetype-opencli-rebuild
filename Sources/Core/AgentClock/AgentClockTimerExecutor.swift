@@ -81,7 +81,13 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         let payload = try parsePayload(from: generation.outputText)
 
         let action = oneShotAction(from: payload.action)
-        let title = oneShotTitle(from: payload.title, command: normalizedCommand)
+        let title = try await oneShotTitle(
+            from: payload.title,
+            command: normalizedCommand,
+            request: request,
+            configuration: configuration,
+            apiKey: apiKey
+        )
         let fireAt = oneShotFireAt(from: payload.fireAt, request: request)
         let notes = oneShotNotes(from: payload.notes, title: title, command: normalizedCommand)
 
@@ -149,9 +155,25 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    private func oneShotTitle(from value: String?, command: String) -> String {
+    private func oneShotTitle(
+        from value: String?,
+        command: String,
+        request: AgentClockParameterExtractionRequest,
+        configuration: TextGenerationProviderConfiguration,
+        apiKey: String
+    ) async throws -> String {
         let normalized = trimmed(value)
-        return normalized.isEmpty ? "闹钟：\(command)" : normalized
+        guard normalized.isEmpty else {
+            return normalized
+        }
+        let fallback = try await summarizeTitleByModel(
+            command: command,
+            referenceDate: request.referenceDate,
+            timeZone: request.timeZone,
+            configuration: configuration,
+            apiKey: apiKey
+        )
+        return fallback.isEmpty ? "闹钟提醒" : fallback
     }
 
     private func oneShotAction(from value: String?) -> String {
@@ -183,6 +205,51 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         let epoch = date.timeIntervalSince1970
         let rounded = floor(epoch / 60.0) * 60.0 + 60.0
         return Date(timeIntervalSince1970: rounded)
+    }
+
+    private func summarizeTitleByModel(
+        command: String,
+        referenceDate: Date,
+        timeZone: TimeZone,
+        configuration: TextGenerationProviderConfiguration,
+        apiKey: String
+    ) async throws -> String {
+        let referenceText = AgentClockDateFormatter.iso8601.string(from: referenceDate)
+        let titleRequest = TextGenerationRequest(
+            systemPrompt: """
+            你是闹钟标题概括器。请把用户口令概括成一个简短闹钟标题。
+            规则：
+            1. 只输出标题纯文本，不要 JSON、解释、引号、代码块。
+            2. 标题控制在 4 到 12 个中文字符，信息清晰。
+            """,
+            userPrompt: """
+            当前参考时间：\(referenceText)
+            当前时区：\(timeZone.identifier)
+            用户口令：\(command)
+            """,
+            temperature: 0,
+            maxOutputTokens: 32
+        )
+        let generation = try await generationProvider.generateText(
+            request: titleRequest,
+            configuration: configuration,
+            apiKey: apiKey
+        )
+        return sanitizeModelTitle(generation.outputText)
+    }
+
+    private func sanitizeModelTitle(_ raw: String) -> String {
+        var normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.hasPrefix("\""), normalized.hasSuffix("\""), normalized.count >= 2 {
+            normalized = String(normalized.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if normalized.hasPrefix("“"), normalized.hasSuffix("”"), normalized.count >= 2 {
+            normalized = String(normalized.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if normalized.count > 20 {
+            normalized = String(normalized.prefix(20))
+        }
+        return normalized
     }
 }
 
@@ -275,6 +342,7 @@ struct AppleScriptAgentClockRunner: AgentClockScriptRunning {
             "tell process \"Clock\"",
             "set frontmost to true",
             "set beforeCount to 0",
+            "set beforeIDs to \"\"",
             "try",
             "set allButtonsBefore to every button of entire contents of window 1",
             "repeat with b in allButtonsBefore",
@@ -286,7 +354,12 @@ struct AppleScriptAgentClockRunner: AgentClockScriptRunning {
             "try",
             "set bDescription to (description of b) as string",
             "end try",
-            "if bIdentifier starts with \"Alarm-\" or bDescription contains \", 打开\" or bDescription contains \", Open\" then set beforeCount to beforeCount + 1",
+            "if bIdentifier starts with \"Alarm-\" then",
+            "set beforeCount to beforeCount + 1",
+            "set beforeIDs to beforeIDs & \"|\" & bIdentifier",
+            "else if bDescription contains \", 打开\" or bDescription contains \", Open\" then",
+            "set beforeCount to beforeCount + 1",
+            "end if",
             "end repeat",
             "end try",
             "set switchedToAlarmTab to false",
@@ -385,6 +458,7 @@ struct AppleScriptAgentClockRunner: AgentClockScriptRunning {
             "if savedAlarm is false then return \"clock_error|detail=save_button_not_found\"",
             "delay 0.35",
             "set afterCount to 0",
+            "set newAlarmIdentifier to \"\"",
             "try",
             "set allButtonsAfter to every button of entire contents of window 1",
             "repeat with b in allButtonsAfter",
@@ -396,9 +470,15 @@ struct AppleScriptAgentClockRunner: AgentClockScriptRunning {
             "try",
             "set bDescription to (description of b) as string",
             "end try",
-            "if bIdentifier starts with \"Alarm-\" or bDescription contains \", 打开\" or bDescription contains \", Open\" then set afterCount to afterCount + 1",
+            "if bIdentifier starts with \"Alarm-\" then",
+            "set afterCount to afterCount + 1",
+            "if beforeIDs does not contain (\"|\" & bIdentifier) and newAlarmIdentifier is \"\" then set newAlarmIdentifier to bIdentifier",
+            "else if bDescription contains \", 打开\" or bDescription contains \", Open\" then",
+            "set afterCount to afterCount + 1",
+            "end if",
             "end repeat",
             "end try",
+            "if newAlarmIdentifier is not \"\" then return \"alarm_created|clock_app=true|once=true|time=\" & timeText & \"|alarm_id=\" & newAlarmIdentifier & \"|before=\" & beforeCount & \"|after=\" & afterCount",
             "if afterCount > beforeCount then return \"alarm_created|clock_app=true|once=true|time=\" & timeText & \"|alarm_id=\" & alarmID & \"|before=\" & beforeCount & \"|after=\" & afterCount",
             "return \"clock_error|detail=verification_failed|before=\" & beforeCount & \"|after=\" & afterCount",
             "end tell",

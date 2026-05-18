@@ -33,6 +33,24 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 13:20 - 修复 Clock 假失败并改为模型层标题概括
+
+- 本次任务：处理“实际已创建闹钟但返回失败”的问题，并保证时钟标签标题来自大模型概括。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - Clock 参数提取新增“二次模型标题概括”兜底：当主 JSON 的 `title` 为空时，再调用一次模型专门生成简短标题，不再回落原始口令。
+  - AppleScript 成功校验新增“新闹钟标识检测”：保存前记录已有 `Alarm-*` 标识，保存后优先判断是否出现新的 `Alarm-*`；命中即判定成功。
+  - 保留 `afterCount > beforeCount` 的计数兜底，作为无标识场景的后备判定。
+  - 新增单测覆盖：主提取返回空标题时，标题由第二次模型概括结果填充。
+- 为什么这样改：
+  - 用户真实反馈里出现“系统里已看到新闹钟，但历史报 verification_failed”，说明旧判定存在假失败。
+  - 标签标题直接回落原始口令不符合体验预期，应该由模型做概括。
+- 影响了哪些模块：
+  - Agent clock 参数提取链路、Clock 成功判定链路、clock 相关测试稳定性。
+
 ### 2026-05-18 13:06 - 强化 Clock UI 自动化路径，改成 24 小时制输入并补齐多层兜底
 
 - 本次任务：继续修复 `clock` 在不同系统语言和不同 UI 层级下偶发失败的问题，提升真实创建闹钟成功率。

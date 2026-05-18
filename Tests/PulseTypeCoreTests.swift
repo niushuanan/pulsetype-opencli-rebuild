@@ -451,6 +451,36 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(result.notes, "提醒起床")
     }
 
+    func testClockParameterExtractorUsesModelSummarizedTitleWhenPrimaryTitleIsEmpty() async throws {
+        let extractor = LLMAgentClockParameterExtractor(
+            generationProvider: FakeTextGenerationProvider(
+                outputs: [
+                    """
+                    {
+                      "action": "create_one_shot_alarm",
+                      "title": "",
+                      "fire_at": "2026-05-23T07:00:00+08:00",
+                      "notes": "提醒起床"
+                    }
+                    """,
+                    "晨间上课提醒"
+                ]
+            )
+        )
+
+        let result = try await extractor.extract(
+            request: AgentClockParameterExtractionRequest(
+                command: "明早七点提醒我上课",
+                referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
+                timeZone: TimeZone(identifier: "Asia/Shanghai")!
+            ),
+            configuration: makeTextGenerationConfiguration(),
+            apiKey: "text-key-123456"
+        )
+
+        XCTAssertEqual(result.title, "晨间上课提醒")
+    }
+
     func testClockExecutorRunsClockAppleScriptAfterModelExtraction() async throws {
         let runner = FakeAgentClockRunner(
             result: AgentClockExecutionResult(success: true, identifier: "clock-1", detail: "alarm_created")
@@ -938,10 +968,16 @@ struct FakeDictationPostProcessor: DictationPostProcessor {
 
 final class FakeTextGenerationProvider: TextGenerationProvider, @unchecked Sendable {
     let supportedProviderTypes: [ProviderType] = [.openAICompatible]
-    private let output: String
+    private let outputs: [String]
+    private let lock = NSLock()
+    private var index = 0
 
     init(output: String) {
-        self.output = output
+        self.outputs = [output]
+    }
+
+    init(outputs: [String]) {
+        self.outputs = outputs.isEmpty ? [""] : outputs
     }
 
     func generateText(
@@ -949,11 +985,19 @@ final class FakeTextGenerationProvider: TextGenerationProvider, @unchecked Senda
         configuration: TextGenerationProviderConfiguration,
         apiKey _: String
     ) async throws -> TextGenerationResult {
-        TextGenerationResult(
+        let selectedOutput: String = {
+            lock.lock()
+            defer { lock.unlock() }
+            let bounded = min(index, outputs.count - 1)
+            let value = outputs[bounded]
+            index += 1
+            return value
+        }()
+        return TextGenerationResult(
             providerType: configuration.providerType,
             providerName: configuration.providerName,
             modelName: configuration.modelName,
-            outputText: output
+            outputText: selectedOutput
         )
     }
 }
