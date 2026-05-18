@@ -33,6 +33,21 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 14:30 - Clock 创建弹窗标签一次性写入稳定化
+
+- 本次任务：修复“闹钟创建成功但标签仍显示默认‘闹钟’”问题，要求在创建时一次性写入概括标题，不走二次编辑。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 在 AppleScript 标签写入段增加“写后读回确认”逻辑，先尝试 `window/sheet` 的 `text field 1`，只有读回值与目标标题一致才判定写入成功。
+  - 增加 `entire contents of window 1` 的 `text field` 遍历写入兜底，适配 Clock 新建闹钟弹窗里层级变化的真实控件路径。
+  - 保留键盘输入兜底，避免极端 UI 状态下控件 API 写入失败。
+- 为什么这样改：
+  - 真实用户反馈显示创建本身成功，但标题经常没有落到最终卡片，核心是标签控件定位不稳定。
+- 影响了哪些模块：
+  - Agent clock 的 UI 自动化创建路径、标题落地成功率、Clock 端用户可见结果一致性。
+
 ### 2026-05-18 13:18 - Clock 标题质量与成功校验稳定性提升
 
 - 本次任务：处理三类用户反馈：标题概括质量不足、Clock 打开体验突兀、成功校验仍误报失败。
