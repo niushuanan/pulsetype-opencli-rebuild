@@ -417,9 +417,34 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
             )
         }
 
-        let playbackState = evidenceField("state", in: scriptResult.stdout) ?? ""
-        let track = evidenceField("track", in: scriptResult.stdout)
-        let artist = evidenceField("artist", in: scriptResult.stdout)
+        var playbackState = evidenceField("state", in: scriptResult.stdout) ?? ""
+        var track = evidenceField("track", in: scriptResult.stdout)
+        var artist = evidenceField("artist", in: scriptResult.stdout)
+        var recoveryEvidence = ""
+
+        if parsed.action == .play, !isPlaybackActive(playbackState) {
+            let resumeResult = await runResume()
+            if resumeResult.exitCode == 0 {
+                let resumeState = evidenceField("state", in: resumeResult.stdout) ?? ""
+                if let resumeTrack = normalizedNonEmpty(evidenceField("track", in: resumeResult.stdout)) {
+                    track = resumeTrack
+                    recoveryEvidence += "|resume_track=\(sanitizeEvidenceValue(resumeTrack))"
+                }
+                if let resumeArtist = normalizedNonEmpty(evidenceField("artist", in: resumeResult.stdout)) {
+                    artist = resumeArtist
+                    recoveryEvidence += "|resume_artist=\(sanitizeEvidenceValue(resumeArtist))"
+                }
+                playbackState = resumeState
+                recoveryEvidence += "|auto_resume=true|resume_state=\(sanitizeEvidenceValue(resumeState))"
+            } else {
+                let stderr = resumeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                recoveryEvidence += "|auto_resume_failed=true"
+                if !stderr.isEmpty {
+                    recoveryEvidence += "|resume_stderr=\(sanitizeEvidenceValue(stderr))"
+                }
+            }
+        }
+
         let exactMatch = matchesRequestedTrack(query: parsed.query, evidence: scriptResult.stdout)
         let confidence = (parsed.action == .play && (parsed.query?.isEmpty == false))
             ? (exactMatch ? "high" : "low")
@@ -428,6 +453,7 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
             + "|playback_state=\(sanitizeEvidenceValue(playbackState))"
             + "|exact_match=\(exactMatch ? "true" : "false")"
             + "|evidence_confidence=\(confidence)"
+            + recoveryEvidence
 
         if parsed.action == .play, !isPlaybackActive(playbackState) {
             return AgentMusicExecutionOutcome(

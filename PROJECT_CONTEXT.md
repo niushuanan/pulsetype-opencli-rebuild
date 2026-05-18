@@ -33,6 +33,22 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 09:44 - 播放后误判失败修复（state=stopped 自动补救）
+
+- 本次任务：修复 Agent 音乐播放里“已经选中目标歌曲，但历史仍报播放失败”的问题。
+- 改了哪些文件：
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 在 `AgentMusicControlExecutor.execute(...)` 的 `play` 分支增加自动补救：当首轮执行回传 `state=stopped` 时，立即调用一次 `runResume()` 做恢复播放并再次读取状态。
+  - 如果补救后状态进入 `playing/play`，则按成功返回；若仍非播放态，才保留失败判定。
+  - 证据字段新增补救轨迹：`auto_resume=true/false`、`resume_state=...`，并在可用时补充 `resume_track`、`resume_artist`，方便历史页排障。
+- 为什么这样改：
+  - 之前播放校验是“单次瞬时状态判定”，在 Music 刚切歌但状态还没稳定时会误报失败。
+  - 自动补救能覆盖这类时序抖动，保持“说播放就应尽量播放成功”的用户体验。
+- 影响了哪些模块：
+  - Agent 音乐执行器播放校验路径、历史证据可观测性。
+
 ### 2026-05-18 02:12 - Agent 页改成极简开关，并把开关接入真实执行门禁
 
 - 本次任务：把 Agent 页面收敛成“标题说明 + 功能开关列表”，并确保开关不是纯展示，而是真正控制 Agent 音乐执行。
