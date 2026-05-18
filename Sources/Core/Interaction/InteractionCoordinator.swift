@@ -19,7 +19,6 @@ final class InteractionCoordinator {
     private let agentToolCatalog: any AgentToolCatalogProviding
     private let agentMusicExecutor: any AgentMusicControlling
     private let agentCalendarExecutor: any AgentCalendarControlling
-    private let agentClockExecutor: any AgentClockTimerControlling
 
     private var cancellables = Set<AnyCancellable>()
     private var transcriptionTask: Task<Void, Never>?
@@ -42,8 +41,7 @@ final class InteractionCoordinator {
         agentRouter: (any AgentToolRouting)? = nil,
         agentToolCatalog: (any AgentToolCatalogProviding)? = nil,
         agentMusicExecutor: (any AgentMusicControlling)? = nil,
-        agentCalendarExecutor: (any AgentCalendarControlling)? = nil,
-        agentClockExecutor: (any AgentClockTimerControlling)? = nil
+        agentCalendarExecutor: (any AgentCalendarControlling)? = nil
     ) {
         self.sessionStore = sessionStore
         self.permissionsCenter = permissionsCenter
@@ -60,7 +58,6 @@ final class InteractionCoordinator {
         self.agentToolCatalog = agentToolCatalog ?? AgentToolCatalogStore()
         self.agentMusicExecutor = agentMusicExecutor ?? AgentMusicControlExecutor()
         self.agentCalendarExecutor = agentCalendarExecutor ?? AgentCalendarCreateEventExecutor()
-        self.agentClockExecutor = agentClockExecutor ?? AgentClockTimerExecutor()
         bindListeningLevel()
         bindExternalAppTracking()
     }
@@ -637,21 +634,6 @@ final class InteractionCoordinator {
             outcomeOutputText = outcome.outputText
             outcomeEvidenceSummary = outcome.evidenceSummary
             logStagePrefix = "agent.calendar"
-
-        case AgentCapabilitySettings.clockTimerToolID:
-            let outcome = await agentClockExecutor.execute(
-                AgentClockTimerExecutionRequest(
-                    traceID: traceID,
-                    command: commandText
-                ),
-                configuration: routeConfiguration,
-                apiKey: routeAPIKey
-            )
-            outcomeStatus = outcome.status
-            outcomeMessage = outcome.message
-            outcomeOutputText = outcome.outputText
-            outcomeEvidenceSummary = outcome.evidenceSummary
-            logStagePrefix = "agent.clock"
 
         default:
             let message = AgentRouteError.unknownToolID(routeOutcome.toolID).localizedDescription

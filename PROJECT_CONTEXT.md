@@ -33,6 +33,27 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 15:20 - 彻底移除闹钟能力
+
+- 本次任务：按用户要求把 PulseType 里的闹钟能力完整删除，不再保留开关、路由、执行器和测试。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`（删除）
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `Sources/Core/Interaction/InteractionCoordinator.swift`
+  - `Sources/UI/SettingsView.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PulseType.xcodeproj/project.pbxproj`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 删除整条 `AgentClock` 执行链，不再保留模型提取、Clock 自动化和本地执行器。
+  - 从 Agent 能力注册和 Router 分流里移除 `apple.clock.timer`，只保留音乐控制和日历日程。
+  - 从设置页移除“闹钟提醒”开关和相关首页文案。
+  - 删除对应单测、Fake 类型和工程文件中的 `AgentClock` 源码引用。
+- 为什么这样改：
+  - 用户已决定放弃闹钟能力，这条链和当前整体技术方向不一致，继续保留只会增加维护成本和误导后续开发。
+- 影响了哪些模块：
+  - Agent 工具目录、Router 分流、设置页能力管理、测试集、Xcode 工程文件。
+
 ### 2026-05-18 15:13 - Clock 添加闹钟按钮改为轮询查找，降低首屏未挂载导致的失败
 
 - 本次任务：修复 `clock_error|detail=add_alarm_button_not_found`。

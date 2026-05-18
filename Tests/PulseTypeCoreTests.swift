@@ -65,15 +65,6 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertFalse(AgentCapabilitySettings.isCalendarCreateEventEnabled(defaults: defaults))
     }
 
-    func testAgentClockCapabilityDefaultsToEnabledAndCanBeTurnedOff() {
-        let defaults = makeDefaults()
-
-        XCTAssertTrue(AgentCapabilitySettings.isClockTimerEnabled(defaults: defaults))
-
-        defaults.set(false, forKey: AgentCapabilitySettings.clockTimerEnabledKey)
-        XCTAssertFalse(AgentCapabilitySettings.isClockTimerEnabled(defaults: defaults))
-    }
-
     func testHistoryStoreKeepsSupportedModesFromOldFiles() throws {
         let directory = makeTemporaryDirectory()
         let file = directory.appendingPathComponent("session-history-v2.json")
@@ -423,138 +414,6 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertTrue(outcome.evidenceSummary.contains("verification=created"))
     }
 
-    func testClockParameterExtractorParsesModelJSON() async throws {
-        let extractor = LLMAgentClockParameterExtractor(
-            generationProvider: FakeTextGenerationProvider(
-                output: """
-                {
-                  "title": "起床闹钟",
-                  "fire_at": "2026-05-23T07:00:00+08:00",
-                  "notes": "提醒起床"
-                }
-                """
-            )
-        )
-
-        let result = try await extractor.extract(
-            request: AgentClockParameterExtractionRequest(
-                command: "明早七点叫我起床",
-                referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
-                timeZone: TimeZone(identifier: "Asia/Shanghai")!
-            ),
-            configuration: makeTextGenerationConfiguration(),
-            apiKey: "text-key-123456"
-        )
-
-        XCTAssertEqual(result.title, "起床闹钟")
-        XCTAssertEqual(result.fireAtISO8601, "2026-05-23T07:00:00+08:00")
-        XCTAssertEqual(result.notes, "提醒起床")
-    }
-
-    func testClockParameterExtractorBuildsHeuristicTitleWhenPrimaryTitleIsEmpty() async throws {
-        let extractor = LLMAgentClockParameterExtractor(
-            generationProvider: FakeTextGenerationProvider(
-                output: """
-                {
-                  "action": "create_one_shot_alarm",
-                  "title": "",
-                  "fire_at": "2026-05-23T07:00:00+08:00",
-                  "notes": "提醒起床"
-                }
-                """
-            )
-        )
-
-        let result = try await extractor.extract(
-            request: AgentClockParameterExtractionRequest(
-                command: "明早七点提醒我上课",
-                referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
-                timeZone: TimeZone(identifier: "Asia/Shanghai")!
-            ),
-            configuration: makeTextGenerationConfiguration(),
-            apiKey: "text-key-123456"
-        )
-
-        XCTAssertFalse(result.title.isEmpty)
-        XCTAssertNotEqual(result.title, "闹钟")
-        XCTAssertNotEqual(result.title, "提醒")
-        XCTAssertNotEqual(result.title, "闹钟提醒")
-    }
-
-    func testClockParameterExtractorFailsWhenFireAtMissingInOneShotOutput() async throws {
-        let extractor = LLMAgentClockParameterExtractor(
-            generationProvider: FakeTextGenerationProvider(
-                output: """
-                {
-                  "action": "create_one_shot_alarm",
-                  "title": "帮班主任干活",
-                  "fire_at": "",
-                  "notes": "提醒办事"
-                }
-                """
-            )
-        )
-
-        do {
-            _ = try await extractor.extract(
-                request: AgentClockParameterExtractionRequest(
-                    command: "定一个今天下午五点二十的闹钟",
-                    referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
-                    timeZone: TimeZone(identifier: "Asia/Shanghai")!
-                ),
-                configuration: makeTextGenerationConfiguration(),
-                apiKey: "text-key-123456"
-            )
-            XCTFail("预期 fire_at 为空时应直接失败")
-        } catch let error as AgentClockError {
-            switch error {
-            case let .modelReturnedInvalidJSON(detail):
-                XCTAssertTrue(detail.contains("missing_fire_at"))
-            default:
-                XCTFail("错误类型不符合预期: \(error)")
-            }
-        }
-    }
-
-    func testClockExecutorRunsClockAppleScriptAfterModelExtraction() async throws {
-        let runner = FakeAgentClockRunner(
-            result: AgentClockExecutionResult(success: true, identifier: "clock-1", detail: "alarm_created")
-        )
-        let executor = AgentClockTimerExecutor(
-            parameterExtractor: LLMAgentClockParameterExtractor(
-                generationProvider: FakeTextGenerationProvider(
-                    output: """
-                    {
-                      "action": "create_one_shot_alarm",
-                      "title": "会议提醒",
-                      "fire_at": "2026-05-23T20:30:00+08:00",
-                      "notes": "提醒开会"
-                    }
-                    """
-                )
-            ),
-            runner: runner
-        )
-
-        let outcome = await executor.execute(
-            AgentClockTimerExecutionRequest(
-                traceID: "trace-clock",
-                command: "今晚八点半提醒我开会",
-                referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
-                timeZone: TimeZone(identifier: "Asia/Shanghai")!
-            ),
-            configuration: makeTextGenerationConfiguration(),
-            apiKey: "text-key-123456"
-        )
-
-        XCTAssertEqual(outcome.status, .success)
-        XCTAssertEqual(outcome.outputText, "已设置闹钟：会议提醒。")
-        XCTAssertEqual(runner.executedSpecs.first?.title, "会议提醒")
-        XCTAssertEqual(runner.executedSpecs.first?.notes, "提醒开会")
-        XCTAssertEqual(runner.executedSpecs.first?.action, "create_one_shot_alarm")
-        XCTAssertTrue(outcome.evidenceSummary.contains("apple.clock.timer"))
-    }
-
     func testInteractionCoordinatorRoutesAgentCommandBeforeExecutingMusicTool() async throws {
         let directory = makeTemporaryDirectory()
         let credentials = MemoryCredentialStore()
@@ -661,59 +520,6 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(historyStore.entries.first?.textProcessingModel, "deepseek-v4-flash")
         XCTAssertTrue(historyStore.entries.first?.agentEvidenceSummary?.contains("agent.route") == true)
         XCTAssertTrue(historyStore.entries.first?.agentEvidenceSummary?.contains("apple.calendar.create_event|fake=true") == true)
-        XCTAssertEqual(sessionStore.phase, .idle)
-    }
-
-    func testInteractionCoordinatorRoutesClockCommandBeforeExecutingClockTool() async throws {
-        let directory = makeTemporaryDirectory()
-        let credentials = MemoryCredentialStore()
-        try credentials.saveAPIKey("asr-key-123456", for: defaultASRCredentialKeyRef)
-        try credentials.saveAPIKey("text-key-123456", for: defaultTextCredentialKeyRef)
-
-        let sessionStore = SessionStore()
-        let historyStore = LocalHistoryStore(historyDirectory: directory.appendingPathComponent("History"))
-        let router = FakeAgentToolRouter(toolID: AgentCapabilitySettings.clockTimerToolID)
-        let clockExecutor = FakeAgentClockExecutor(
-            outcome: AgentClockTimerExecutionOutcome(
-                status: .success,
-                message: "已设置闹钟：起床闹钟。",
-                outputText: "已设置闹钟：起床闹钟。",
-                evidenceSummary: "apple.clock.timer|fake=true"
-            )
-        )
-        let coordinator = InteractionCoordinator(
-            sessionStore: sessionStore,
-            permissionsCenter: PermissionsCenter(
-                microphoneStateResolver: { .granted },
-                accessibilityStateResolver: { .granted }
-            ),
-            audioCaptureService: FakeAudioCaptureService(directory: directory),
-            providerSettingsStore: ProviderSettingsStore(
-                defaults: makeDefaults(),
-                credentialStore: credentials
-            ),
-            providerRegistry: SpeechProviderRegistry(providers: [FakeTranscriptionProvider()]),
-            textOutputCoordinator: FakeTextOutputCoordinator(),
-            contextDetector: FixedContextDetector(),
-            localHistoryStore: historyStore,
-            speechPipelineLogger: SpeechPipelineLogger(diagnosticsDirectory: directory.appendingPathComponent("Diagnostics")),
-            dictationPostProcessor: FakeDictationPostProcessor(output: "不会走普通听写整理"),
-            agentRouter: router,
-            agentToolCatalog: FakeAgentToolCatalog(tools: [Self.clockToolManifest]),
-            agentClockExecutor: clockExecutor
-        )
-
-        coordinator.handleWakeInput(context: .agentHold)
-        coordinator.handleWakeInput(context: .agentHold)
-
-        try await waitUntil { historyStore.entries.count == 1 }
-        XCTAssertEqual(router.requests.first?.command, "ASR 原文")
-        XCTAssertEqual(clockExecutor.requests.first?.command, "ASR 原文")
-        XCTAssertEqual(historyStore.entries.first?.mode, .agent)
-        XCTAssertEqual(historyStore.entries.first?.status, .success)
-        XCTAssertEqual(historyStore.entries.first?.outputText, "已设置闹钟：起床闹钟。")
-        XCTAssertTrue(historyStore.entries.first?.agentEvidenceSummary?.contains("agent.route") == true)
-        XCTAssertTrue(historyStore.entries.first?.agentEvidenceSummary?.contains("apple.clock.timer|fake=true") == true)
         XCTAssertEqual(sessionStore.phase, .idle)
     }
 
@@ -826,13 +632,6 @@ final class PulseTypeCoreTests: XCTestCase {
         displayName: "日历日程",
         description: "在 Calendar 创建会议、约会、行程等日程。",
         examples: ["我下周六九点有个会", "明天下午三点安排项目讨论"]
-    )
-
-    private static let clockToolManifest = AgentToolManifest(
-        toolID: AgentCapabilitySettings.clockTimerToolID,
-        displayName: "闹钟提醒",
-        description: "创建一次性闹钟提醒。",
-        examples: ["明早七点叫我起床", "今晚九点半提醒我开会"]
     )
 
     private func waitUntil(
@@ -1051,20 +850,6 @@ final class FakeAgentCalendarScriptRunner: AgentCalendarScriptRunning, @unchecke
     }
 }
 
-final class FakeAgentClockRunner: AgentClockScriptRunning, @unchecked Sendable {
-    private(set) var executedSpecs: [AgentClockTimerSpec] = []
-    private let result: AgentClockExecutionResult
-
-    init(result: AgentClockExecutionResult) {
-        self.result = result
-    }
-
-    func execute(_ spec: AgentClockTimerSpec) async -> AgentClockExecutionResult {
-        executedSpecs.append(spec)
-        return result
-    }
-}
-
 @MainActor
 final class FakeAgentToolCatalog: AgentToolCatalogProviding {
     private let tools: [AgentToolManifest]
@@ -1147,32 +932,6 @@ final class FakeAgentCalendarExecutor: AgentCalendarControlling {
         configuration _: TextGenerationProviderConfiguration,
         apiKey _: String
     ) async -> AgentCalendarExecutionOutcome {
-        requests.append(request)
-        return outcome
-    }
-}
-
-@MainActor
-final class FakeAgentClockExecutor: AgentClockTimerControlling {
-    private(set) var requests: [AgentClockTimerExecutionRequest] = []
-    private let outcome: AgentClockTimerExecutionOutcome
-
-    init(
-        outcome: AgentClockTimerExecutionOutcome = AgentClockTimerExecutionOutcome(
-            status: .success,
-            message: "已设置闹钟。",
-            outputText: "已设置闹钟。",
-            evidenceSummary: "apple.clock.timer|fake=true"
-        )
-    ) {
-        self.outcome = outcome
-    }
-
-    func execute(
-        _ request: AgentClockTimerExecutionRequest,
-        configuration _: TextGenerationProviderConfiguration,
-        apiKey _: String
-    ) async -> AgentClockTimerExecutionOutcome {
         requests.append(request)
         return outcome
     }
