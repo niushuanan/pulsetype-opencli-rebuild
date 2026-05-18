@@ -1,3 +1,5 @@
+import AppKit
+import ApplicationServices
 import Foundation
 
 struct AgentClockParameterExtractionRequest: Equatable {
@@ -284,198 +286,297 @@ struct AppleScriptAgentClockRunner: AgentClockScriptRunning {
         let hour24 = comps.hour ?? 0
         let timeText = String(format: "%02d:%02d", hour24, minute)
         let identifier = UUID().uuidString
+        return ClockAccessibilityAlarmCreator().createAlarm(
+            title: spec.title,
+            timeText: timeText,
+            identifier: identifier
+        )
+    }
+}
 
-        let lines = [
-            "on run argv",
-            "set targetLabel to item 1 of argv",
-            "set timeText to item 2 of argv",
-            "set alarmID to item 3 of argv",
-            "tell application \"Clock\" to launch",
-            "delay 0.2",
-            "tell application \"System Events\"",
-            "if UI elements enabled is false then return \"clock_error|detail=accessibility_denied\"",
-            "tell process \"Clock\"",
-            "set frontmost to true",
-            "set beforeIDs to {}",
-            "try",
-            "set allButtonsBefore to every button of entire contents of window 1",
-            "repeat with b in allButtonsBefore",
-            "set bIdentifier to \"\"",
-            "try",
-            "set bIdentifier to (identifier of b) as string",
-            "end try",
-            "if bIdentifier starts with \"Alarm-\" then set end of beforeIDs to bIdentifier",
-            "end repeat",
-            "end try",
-            "set switchedToAlarmTab to false",
-            "try",
-            "click menu item \"闹钟\" of menu 1 of menu bar item \"显示\" of menu bar 1",
-            "set switchedToAlarmTab to true",
-            "end try",
-            "if switchedToAlarmTab is false then",
-            "try",
-            "click menu item \"Alarm\" of menu 1 of menu bar item \"View\" of menu bar 1",
-            "set switchedToAlarmTab to true",
-            "end try",
-            "end if",
-            "set openedEditor to false",
-            "try",
-            "click menu button 1 of toolbar 1 of window 1",
-            "set openedEditor to true",
-            "end try",
-            "if openedEditor is false then return \"clock_error|detail=add_alarm_button_not_found\"",
-            "delay 0.2",
-            "set didSetTime to false",
-            "try",
-            "set value of UI element 1 of window 1 to timeText",
-            "set didSetTime to true",
-            "end try",
-            "if didSetTime is false then",
-            "try",
-            "click UI element 1 of sheet 1 of window 1",
-            "keystroke \"a\" using command down",
-            "keystroke timeText",
-            "key code 36",
-            "set didSetTime to true",
-            "end try",
-            "end if",
-            "if didSetTime is false then",
-            "try",
-            "click UI element 1 of window 1",
-            "keystroke \"a\" using command down",
-            "keystroke timeText",
-            "key code 36",
-            "set didSetTime to true",
-            "end try",
-            "end if",
-            "if didSetTime is false then",
-            "return \"clock_error|detail=set_time_failed\"",
-            "end if",
-            "delay 0.2",
-            "if targetLabel is not \"\" then",
-            "set didSetLabel to false",
-            "try",
-            "set value of text field 1 of window 1 to targetLabel",
-            "if ((value of text field 1 of window 1) as string) is targetLabel then",
-            "set didSetLabel to true",
-            "end if",
-            "end try",
-            "if didSetLabel is false then",
-            "try",
-            "set value of text field 1 of sheet 1 of window 1 to targetLabel",
-            "if ((value of text field 1 of sheet 1 of window 1) as string) is targetLabel then",
-            "set didSetLabel to true",
-            "end if",
-            "end try",
-            "end if",
-            "if didSetLabel is false then",
-            "try",
-            "set allTextFields to every text field of entire contents of window 1",
-            "repeat with tf in allTextFields",
-            "try",
-            "set value of tf to targetLabel",
-            "if ((value of tf) as string) is targetLabel then",
-            "set didSetLabel to true",
-            "exit repeat",
-            "end if",
-            "end try",
-            "end repeat",
-            "end try",
-            "end if",
-            "if didSetLabel is false then",
-            "try",
-            "click text field 1 of window 1",
-            "keystroke \"a\" using command down",
-            "keystroke targetLabel",
-            "set didSetLabel to true",
-            "end try",
-            "end if",
-            "end if",
-            "set savedAlarm to false",
-            "try",
-            "repeat with bt in (every button of sheet 1 of window 1)",
-            "set btName to \"\"",
-            "set btDescription to \"\"",
-            "try",
-            "set btName to (name of bt) as string",
-            "end try",
-            "try",
-            "set btDescription to (description of bt) as string",
-            "end try",
-            "if btName is \"保存\" or btName is \"Save\" or btDescription is \"保存\" or btDescription is \"Save\" then",
-            "click bt",
-            "set savedAlarm to true",
-            "exit repeat",
-            "end if",
-            "end repeat",
-            "end try",
-            "if savedAlarm is false then",
-            "try",
-            "click button \"保存\" of window 1",
-            "set savedAlarm to true",
-            "end try",
-            "end if",
-            "if savedAlarm is false then",
-            "try",
-            "click button 1 of sheet 1 of window 1",
-            "set savedAlarm to true",
-            "end try",
-            "end if",
-            "if savedAlarm is false then",
-            "try",
-            "click button 1 of window 1",
-            "set savedAlarm to true",
-            "end try",
-            "end if",
-            "if savedAlarm is false then return \"clock_error|detail=save_button_not_found\"",
-            "delay 0.2",
-            "set verificationPasses to 0",
-            "set afterIDs to {}",
-            "set newAlarmIdentifier to \"\"",
-            "set matchedAlarmByContent to false",
-            "repeat while verificationPasses < 12 and newAlarmIdentifier is \"\"",
-            "delay 0.15",
-            "set afterIDs to {}",
-            "try",
-            "set allButtonsAfter to every button of entire contents of window 1",
-            "repeat with b in allButtonsAfter",
-            "set bIdentifier to \"\"",
-            "set bDescription to \"\"",
-            "try",
-            "set bIdentifier to (identifier of b) as string",
-            "end try",
-            "try",
-            "set bDescription to (description of b) as string",
-            "end try",
-            "if bIdentifier starts with \"Alarm-\" then set end of afterIDs to bIdentifier",
-            "if bIdentifier starts with \"Alarm-\" and (beforeIDs does not contain bIdentifier) and newAlarmIdentifier is \"\" then set newAlarmIdentifier to bIdentifier",
-            "if bIdentifier starts with \"Alarm-\" and bDescription contains timeText then",
-            "if targetLabel is \"\" then",
-            "set matchedAlarmByContent to true",
-            "else if bDescription contains targetLabel then",
-            "set matchedAlarmByContent to true",
-            "end if",
-            "end if",
-            "end repeat",
-            "end try",
-            "set verificationPasses to verificationPasses + 1",
-            "end repeat",
-            "if newAlarmIdentifier is not \"\" then return \"alarm_created|clock_app=true|once=true|time=\" & timeText & \"|alarm_id=\" & newAlarmIdentifier & \"|before=\" & (count of beforeIDs) & \"|after=\" & (count of afterIDs)",
-            "if matchedAlarmByContent then return \"alarm_created|clock_app=true|once=true|time=\" & timeText & \"|alarm_id=\" & alarmID & \"|before=\" & (count of beforeIDs) & \"|after=\" & (count of afterIDs)",
-            "return \"alarm_created|clock_app=true|once=true|time=\" & timeText & \"|alarm_id=\" & alarmID & \"|verification=save_clicked|before=\" & (count of beforeIDs) & \"|after=\" & (count of afterIDs)",
-            "end tell",
-            "end tell",
-            "end run"
-        ]
+private struct ClockAccessibilityAlarmCreator {
+    func createAlarm(title: String, timeText: String, identifier: String) -> AgentClockExecutionResult {
+        guard AXIsProcessTrusted() else {
+            return AgentClockExecutionResult(success: false, identifier: "", detail: "clock_error|detail=accessibility_denied")
+        }
+        guard let app = launchClock() else {
+            return AgentClockExecutionResult(success: false, identifier: "", detail: "clock_error|detail=clock_launch_failed")
+        }
 
-        let result = runClockAppleScript(lines: lines, arguments: [spec.title, timeText, identifier])
-        guard result.exitCode == 0 else {
-            return AgentClockExecutionResult(success: false, identifier: "", detail: "osascript_failed:\(result.stderr)")
+        app.activate(options: [.activateIgnoringOtherApps])
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        guard waitForElement(in: axApp, matching: { role(of: $0) == kAXWindowRole as String }) != nil else {
+            return AgentClockExecutionResult(success: false, identifier: "", detail: "clock_error|detail=window_not_found")
         }
-        guard result.stdout.contains("alarm_created") else {
-            return AgentClockExecutionResult(success: false, identifier: "", detail: result.stdout.isEmpty ? "verification_failed" : result.stdout)
+
+        pressAlarmTab(in: axApp)
+        let beforeIDs = Set(alarmIdentifiers(in: axApp))
+        guard openAlarmEditor(in: axApp) else {
+            return AgentClockExecutionResult(success: false, identifier: "", detail: "clock_error|detail=add_alarm_button_not_found")
         }
-        return AgentClockExecutionResult(success: true, identifier: identifier, detail: result.stdout)
+        guard let sheet = waitForElement(in: axApp, matching: { role(of: $0) == kAXSheetRole as String }) else {
+            return AgentClockExecutionResult(success: false, identifier: "", detail: "clock_error|detail=alarm_editor_not_opened")
+        }
+        guard setTime(timeText, in: sheet) else {
+            return AgentClockExecutionResult(success: false, identifier: "", detail: "clock_error|detail=set_time_failed")
+        }
+        guard setLabel(title, in: sheet) else {
+            return AgentClockExecutionResult(success: false, identifier: "", detail: "clock_error|detail=set_label_failed")
+        }
+        guard pressSave(in: sheet) else {
+            return AgentClockExecutionResult(success: false, identifier: "", detail: "clock_error|detail=save_button_not_found")
+        }
+        guard let matchedID = waitForCreatedAlarm(in: axApp, beforeIDs: beforeIDs, timeText: timeText, title: title) else {
+            let afterIDs = alarmIdentifiers(in: axApp)
+            return AgentClockExecutionResult(
+                success: false,
+                identifier: "",
+                detail: "clock_error|detail=verification_failed|expected_time=\(timeText)|expected_title=\(title)|before=\(beforeIDs.count)|after=\(afterIDs.count)"
+            )
+        }
+
+        return AgentClockExecutionResult(
+            success: true,
+            identifier: matchedID,
+            detail: "alarm_created|clock_app=true|once=true|time=\(timeText)|alarm_id=\(matchedID)|verification=time_and_title_matched|before=\(beforeIDs.count)"
+        )
+    }
+
+    private func launchClock() -> NSRunningApplication? {
+        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.clock").first {
+            return running
+        }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.clock") else {
+            return nil
+        }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        return waitForRunningClock()
+    }
+
+    private func waitForRunningClock() -> NSRunningApplication? {
+        let deadline = Date().addingTimeInterval(4)
+        while Date() < deadline {
+            if let running = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.clock").first {
+                return running
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return nil
+    }
+
+    private func pressAlarmTab(in app: AXUIElement) {
+        guard let tab = findFirst(in: app, matching: { element in
+            role(of: element) == kAXRadioButtonRole as String
+                && textSnapshot(for: element).containsAny(["闹钟", "Alarm"])
+        }) else {
+            return
+        }
+        _ = AXUIElementPerformAction(tab, kAXPressAction as CFString)
+        Thread.sleep(forTimeInterval: 0.15)
+    }
+
+    private func openAlarmEditor(in app: AXUIElement) -> Bool {
+        guard let button = findFirst(in: app, matching: { element in
+            let roleName = role(of: element)
+            return (roleName == kAXMenuButtonRole as String || roleName == kAXButtonRole as String)
+                && textSnapshot(for: element).containsAny(["添加闹钟", "Add Alarm"])
+        }) else {
+            return false
+        }
+        _ = AXUIElementPerformAction(button, kAXPressAction as CFString)
+        Thread.sleep(forTimeInterval: 0.2)
+        if findFirst(in: app, matching: { role(of: $0) == kAXSheetRole as String }) != nil {
+            return true
+        }
+        clickCenter(of: button)
+        return waitForElement(in: app, matching: { role(of: $0) == kAXSheetRole as String }) != nil
+    }
+
+    private func setTime(_ timeText: String, in sheet: AXUIElement) -> Bool {
+        guard let dateTimeArea = findFirst(in: sheet, matching: { role(of: $0) == "AXDateTimeArea" }) else {
+            return false
+        }
+        let status = AXUIElementSetAttributeValue(dateTimeArea, kAXValueAttribute as CFString, timeText as CFString)
+        guard status == .success else {
+            return false
+        }
+        Thread.sleep(forTimeInterval: 0.15)
+        return true
+    }
+
+    private func setLabel(_ title: String, in sheet: AXUIElement) -> Bool {
+        guard let field = findFirst(in: sheet, matching: { role(of: $0) == kAXTextFieldRole as String }) else {
+            return false
+        }
+        let status = AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, title as CFString)
+        guard status == .success else {
+            return false
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+        return true
+    }
+
+    private func pressSave(in sheet: AXUIElement) -> Bool {
+        guard let save = findFirst(in: sheet, matching: { element in
+            role(of: element) == kAXButtonRole as String
+                && textSnapshot(for: element).containsAny(["保存", "Save"])
+        }) else {
+            return false
+        }
+        let status = AXUIElementPerformAction(save, kAXPressAction as CFString)
+        if status != .success {
+            clickCenter(of: save)
+        }
+        Thread.sleep(forTimeInterval: 0.25)
+        return true
+    }
+
+    private func waitForCreatedAlarm(
+        in app: AXUIElement,
+        beforeIDs: Set<String>,
+        timeText: String,
+        title: String
+    ) -> String? {
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            for alarm in alarmElements(in: app) {
+                let alarmID = stringAttribute(kAXIdentifierAttribute as String, on: alarm) ?? ""
+                let snapshot = textSnapshot(for: alarm)
+                guard !beforeIDs.contains(alarmID) else {
+                    continue
+                }
+                if snapshot.contains(timeText), snapshot.contains(title) {
+                    return alarmID.isEmpty ? "matched-by-content" : alarmID
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.15)
+        }
+        return nil
+    }
+
+    private func alarmIdentifiers(in app: AXUIElement) -> [String] {
+        alarmElements(in: app).compactMap { element in
+            let identifier = stringAttribute(kAXIdentifierAttribute as String, on: element) ?? ""
+            return identifier.hasPrefix("Alarm-") ? identifier : nil
+        }
+    }
+
+    private func alarmElements(in app: AXUIElement) -> [AXUIElement] {
+        allElements(in: app).filter { element in
+            let identifier = stringAttribute(kAXIdentifierAttribute as String, on: element) ?? ""
+            return identifier.hasPrefix("Alarm-")
+        }
+    }
+
+    private func waitForElement(in root: AXUIElement, matching predicate: (AXUIElement) -> Bool) -> AXUIElement? {
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if let element = findFirst(in: root, matching: predicate) {
+                return element
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return nil
+    }
+
+    private func findFirst(in root: AXUIElement, matching predicate: (AXUIElement) -> Bool) -> AXUIElement? {
+        allElements(in: root).first(where: predicate)
+    }
+
+    private func allElements(in root: AXUIElement) -> [AXUIElement] {
+        var result: [AXUIElement] = []
+        var stack: [(AXUIElement, Int)] = [(root, 0)]
+        while let (element, depth) = stack.popLast() {
+            result.append(element)
+            guard depth < 8 else { continue }
+            stack.append(contentsOf: children(of: element).map { ($0, depth + 1) })
+        }
+        return result
+    }
+
+    private func children(of element: AXUIElement) -> [AXUIElement] {
+        var value: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value)
+        guard status == .success, let array = value as? [AXUIElement] else {
+            return []
+        }
+        return array
+    }
+
+    private func role(of element: AXUIElement) -> String {
+        stringAttribute(kAXRoleAttribute as String, on: element) ?? ""
+    }
+
+    private func textSnapshot(for element: AXUIElement) -> String {
+        var parts: [String] = []
+        for attribute in [
+            kAXIdentifierAttribute as String,
+            kAXDescriptionAttribute as String,
+            kAXTitleAttribute as String,
+            kAXValueAttribute as String,
+            "AXRoleDescription"
+        ] {
+            if let value = stringAttribute(attribute, on: element), !value.isEmpty {
+                parts.append(value)
+            }
+        }
+        for child in children(of: element) {
+            let childText = textSnapshot(for: child)
+            if !childText.isEmpty {
+                parts.append(childText)
+            }
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private func stringAttribute(_ attribute: String, on element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard status == .success else {
+            return nil
+        }
+        return value as? String
+    }
+
+    private func clickCenter(of element: AXUIElement) {
+        guard let frame = frame(of: element) else {
+            return
+        }
+        let point = CGPoint(x: frame.midX, y: frame.midY)
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
+        let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
+        down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
+        Thread.sleep(forTimeInterval: 0.15)
+    }
+
+    private func frame(of element: AXUIElement) -> CGRect? {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,
+            AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
+            let positionAX = positionValue,
+            let sizeAX = sizeValue
+        else {
+            return nil
+        }
+        var point = CGPoint.zero
+        var size = CGSize.zero
+        guard
+            AXValueGetValue(unsafeBitCast(positionAX, to: AXValue.self), .cgPoint, &point),
+            AXValueGetValue(unsafeBitCast(sizeAX, to: AXValue.self), .cgSize, &size)
+        else {
+            return nil
+        }
+        return CGRect(origin: point, size: size)
+    }
+}
+
+private extension String {
+    func containsAny(_ values: [String]) -> Bool {
+        values.contains { self.localizedCaseInsensitiveContains($0) }
     }
 }
 
