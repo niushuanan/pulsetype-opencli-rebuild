@@ -33,6 +33,23 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 12:35 - 修复 clock 误报成功 + 首页核心特点压缩到 4 行
+
+- 本次任务：修复“clock 显示成功但实际未创建闹钟”的误导问题，并按设计要求精简首页核心特点卡片文案。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`
+  - `Sources/UI/SettingsView.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - `clock` AppleScript 模板新增硬验证：执行前后读取闹钟列表数量（多路径兼容读取），只有 `afterCount > beforeCount` 才返回 `alarm_created`；否则返回 `clock_error|verification_failed`。
+  - 这样可以保证“没创建成功时不会再报成功”，历史会明确写失败原因和前后计数证据。
+  - 首页“核心特点”从 6 行压缩到 4 行，并把 Agent 说明收敛成单行：`Agent：长按一句话执行音乐、日历、闹钟。`
+- 为什么这样改：
+  - 当前最大体验问题不是失败本身，而是错误成功提示；必须先保证结果可信。
+  - 首页卡片信息密度过高，用户要求“功能介绍不超过 4 行、Agent 一行”。
+- 影响了哪些模块：
+  - Agent clock 成功/失败判定、执行证据可观测性、首页核心文案展示。
+
 ### 2026-05-18 12:30 - Clock 改为「受限 JSON + AppleScript 模板填参」，从通知提醒切到 Clock.app 路径
 
 - 本次任务：把 `apple.clock.timer` 从“本地通知提醒”改为“Router 后二次模型提取 + AppleScript 模板执行”，并保持一次性闹钟语义。
