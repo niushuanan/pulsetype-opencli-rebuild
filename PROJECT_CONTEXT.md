@@ -33,6 +33,23 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 14:35 - 修复 clock 在中文时间口令下误用当前时间
+
+- 本次任务：修复“说今天下午五点二十，但实际按当前时刻创建闹钟”的时间判定 bug。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 在 `fire_at` 为空时，新增本地中文时间解析路径，支持“今天/明天/后天 + 上午/下午/中午/晚上/凌晨 + X点Y分/半”。
+  - 新增中文数字解析（如“五点二十”），并统一换算到 24 小时制后组装目标日期时间。
+  - 仅当口令无法解析时，才回退到“下一分钟”兜底，避免错误吞掉用户意图。
+  - 增加单测 `testClockParameterExtractorParsesChineseTimeWhenFireAtMissing`，锁定该回归场景。
+- 为什么这样改：
+  - 之前 `fire_at` 缺失直接回退“下一分钟”，会把明确的自然语言时间误判成“当前时间”。
+- 影响了哪些模块：
+  - Agent clock 参数提取的时间判定准确性、中文口令兼容性、clock 回归测试覆盖。
+
 ### 2026-05-18 14:30 - Clock 创建弹窗标签一次性写入稳定化
 
 - 本次任务：修复“闹钟创建成功但标签仍显示默认‘闹钟’”问题，要求在创建时一次性写入概括标题，不走二次编辑。
