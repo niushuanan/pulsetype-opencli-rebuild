@@ -106,7 +106,7 @@ struct LLMAgentCalendarParameterExtractor: AgentCalendarParameterExtracting {
             endAtISO8601: normalizedOptional(payload.endAt),
             calendarName: normalizedOptional(payload.calendar),
             location: trimmed(payload.location),
-            notes: trimmed(payload.notes),
+            notes: oneShotNotes(from: payload.notes, title: title, command: normalizedCommand),
             alarmMinutesBefore: payload.alarmMinutesBefore
         )
     }
@@ -129,7 +129,8 @@ struct LLMAgentCalendarParameterExtractor: AgentCalendarParameterExtracting {
         7. 这是一次性执行路径，不能追问、不能要求确认、不能输出 needs_confirmation 或 confirmation_question。
         8. 如果用户没说标题，你必须根据语义推理一个短标题，例如“会议”“看医生”“项目讨论”；不能留空。
         9. 如果用户没说日期或时间，你必须结合当前参考时间推理一个最合理的未来时间；不能留空。
-        10. 不要编造地点、备注和日历名；没说就返回空字符串或 null。
+        10. notes 需要基于用户口令补全成一句简短备注，优先包含事件目的；不要留空。
+        11. 不要编造地点和日历名；没说就返回空字符串或 null。
         """
 
         let userPrompt = """
@@ -182,6 +183,14 @@ struct LLMAgentCalendarParameterExtractor: AgentCalendarParameterExtracting {
     private func oneShotTitle(from value: String?, command: String) -> String {
         let normalized = trimmed(value)
         return normalized.isEmpty ? command : normalized
+    }
+
+    private func oneShotNotes(from value: String?, title: String, command: String) -> String {
+        let normalized = trimmed(value)
+        guard normalized.isEmpty else {
+            return normalized
+        }
+        return "事项：\(title)。来源口令：\(command)"
     }
 
     private func oneShotStartAt(

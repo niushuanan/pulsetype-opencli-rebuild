@@ -12,6 +12,7 @@ struct SettingsView: View {
     @ObservedObject private var toastPresenter: ToastPresenter
     @AppStorage(AgentCapabilitySettings.musicControlEnabledKey) private var isAgentMusicControlEnabled = true
     @AppStorage(AgentCapabilitySettings.calendarCreateEventEnabledKey) private var isAgentCalendarCreateEventEnabled = true
+    @AppStorage(AgentCapabilitySettings.clockTimerEnabledKey) private var isAgentClockTimerEnabled = true
 
     @State private var asrTesting = false
     @State private var textTesting = false
@@ -103,6 +104,8 @@ struct SettingsView: View {
             Label("单键开始/结束说话：轻点触发，按住说话，松开后自动结束。", systemImage: "keyboard")
                 .font(PulseUI.Typography.body)
             Label("长按 Agent 键：可控制音乐，也能把会议、约会、行程直接写进日历。", systemImage: "sparkles")
+                .font(PulseUI.Typography.body)
+            Label("闹钟提醒：一句话设置“明早七点叫我起床”这类一次性提醒。", systemImage: "alarm")
                 .font(PulseUI.Typography.body)
             Label("ASR + 文本整理双模型：先转写，再把口述整理成可直接发送的成稿。", systemImage: "waveform.and.magnifyingglass")
                 .font(PulseUI.Typography.body)
@@ -229,6 +232,26 @@ struct SettingsView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .accessibilityLabel("日历日程")
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+
+            Divider()
+                .padding(.leading, 14)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("闹钟提醒")
+                        .font(PulseUI.Typography.bodyStrong)
+                    Text("设置一次性闹钟提醒")
+                        .font(PulseUI.Typography.caption)
+                        .pulseSecondaryText()
+                }
+                Spacer()
+                Toggle("闹钟提醒", isOn: $isAgentClockTimerEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .accessibilityLabel("闹钟提醒")
             }
             .padding(.vertical, 12)
             .padding(.horizontal, 14)

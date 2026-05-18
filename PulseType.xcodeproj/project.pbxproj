@@ -21,6 +21,7 @@
 		42CC9CE02F1BA893CE173C4C /* SpeechConnectionTesters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CDC7C688C0027BF75F3AB3B /* SpeechConnectionTesters.swift */; };
 		506D2F6F8BD28EFAA794A708 /* SpeechTranscriptionErrorPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3141432F39E579F9ED47CC5 /* SpeechTranscriptionErrorPresentation.swift */; };
 		5BEF4C142B837D5D710A4ABA /* LocalHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7AACAD05F67BBE70749EFCB /* LocalHistoryStore.swift */; };
+		61AF3B19E7859D2DBF465C41 /* AgentClockTimerExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0E2FF648C1A770C5B108F3B /* AgentClockTimerExecutor.swift */; };
 		641E792711B5617AFAC0F3A8 /* diagnostic-voice-zh.wav in Resources */ = {isa = PBXBuildFile; fileRef = 594DF521169CAA5D28FF73ED /* diagnostic-voice-zh.wav */; };
 		667E39470E2C71674663325B /* ProviderSettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC37A614638B479F21A9BE44 /* ProviderSettingsStore.swift */; };
 		66CFDCBAF88AFDA93F19A236 /* ConnectionFailureAdvisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980B4EC300BE9D3211A6F6A0 /* ConnectionFailureAdvisor.swift */; };
@@ -105,6 +106,7 @@
 		980B4EC300BE9D3211A6F6A0 /* ConnectionFailureAdvisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionFailureAdvisor.swift; sourceTree = "<group>"; };
 		9B31135DA88F140538F690BA /* PulseTypeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulseTypeApp.swift; sourceTree = "<group>"; };
 		AAF8BE09956AA31E1C87954D /* PulseType.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PulseType.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B0E2FF648C1A770C5B108F3B /* AgentClockTimerExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentClockTimerExecutor.swift; sourceTree = "<group>"; };
 		B3141432F39E579F9ED47CC5 /* SpeechTranscriptionErrorPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTranscriptionErrorPresentation.swift; sourceTree = "<group>"; };
 		B76EE0E496B0199F87463E36 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		BC37A614638B479F21A9BE44 /* ProviderSettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderSettingsStore.swift; sourceTree = "<group>"; };
@@ -234,6 +236,14 @@
 			path = TextProcessing;
 			sourceTree = "<group>";
 		};
+		759C743083D4A3A5A1A5B567 /* AgentClock */ = {
+			isa = PBXGroup;
+			children = (
+				B0E2FF648C1A770C5B108F3B /* AgentClockTimerExecutor.swift */,
+			);
+			path = AgentClock;
+			sourceTree = "<group>";
+		};
 		7F2914AE884BB268C18F27DF /* UI */ = {
 			isa = PBXGroup;
 			children = (
@@ -272,6 +282,7 @@
 			isa = PBXGroup;
 			children = (
 				4A90B970B48F738B700C0623 /* AgentCalendar */,
+				759C743083D4A3A5A1A5B567 /* AgentClock */,
 				D77E6762D4BE854DD0B305EB /* Audio */,
 				F9E8A261F7EED0E04F6E680F /* Context */,
 				ED48F905002E6AE0DBDE7853 /* Diagnostics */,
@@ -480,6 +491,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EC6AF53399F665B75EA481BB /* AgentCalendarExecutor.swift in Sources */,
+				61AF3B19E7859D2DBF465C41 /* AgentClockTimerExecutor.swift in Sources */,
 				8F82F460B556E143E651AE5D /* AppDelegate.swift in Sources */,
 				FD46E29D44B77B9A97D545B8 /* AppModel.swift in Sources */,
 				0BFF36E08E600A3BF576CB58 /* AppRuntimePolicy.swift in Sources */,

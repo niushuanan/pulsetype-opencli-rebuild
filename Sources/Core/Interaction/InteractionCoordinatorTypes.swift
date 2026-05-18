@@ -4,8 +4,10 @@ import Foundation
 enum AgentCapabilitySettings {
     static let musicControlEnabledKey = "agent.capability.music.enabled.v1"
     static let calendarCreateEventEnabledKey = "agent.capability.calendar.create_event.enabled.v1"
+    static let clockTimerEnabledKey = "agent.capability.clock.timer.enabled.v1"
     static let musicControlToolID = "apple.music.control"
     static let calendarCreateEventToolID = "apple.calendar.create_event"
+    static let clockTimerToolID = "apple.clock.timer"
 
     static func isMusicControlEnabled(defaults: UserDefaults = .standard) -> Bool {
         guard defaults.object(forKey: musicControlEnabledKey) != nil else {
@@ -19,6 +21,13 @@ enum AgentCapabilitySettings {
             return true
         }
         return defaults.bool(forKey: calendarCreateEventEnabledKey)
+    }
+
+    static func isClockTimerEnabled(defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: clockTimerEnabledKey) != nil else {
+            return true
+        }
+        return defaults.bool(forKey: clockTimerEnabledKey)
     }
 }
 
@@ -64,7 +73,8 @@ final class AgentToolCatalogStore: AgentToolCatalogProviding {
 
         var manifestsByID: [String: AgentToolManifest] = [
             Self.musicManifest.toolID: Self.musicManifest,
-            Self.calendarCreateEventManifest.toolID: Self.calendarCreateEventManifest
+            Self.calendarCreateEventManifest.toolID: Self.calendarCreateEventManifest,
+            Self.clockTimerManifest.toolID: Self.clockTimerManifest
         ]
 
         let toolDirectories = (try? fileManager.contentsOfDirectory(
@@ -121,6 +131,8 @@ final class AgentToolCatalogStore: AgentToolCatalogProviding {
             return AgentCapabilitySettings.isMusicControlEnabled(defaults: defaults)
         case AgentCapabilitySettings.calendarCreateEventToolID:
             return AgentCapabilitySettings.isCalendarCreateEventEnabled(defaults: defaults)
+        case AgentCapabilitySettings.clockTimerToolID:
+            return AgentCapabilitySettings.isClockTimerEnabled(defaults: defaults)
         default:
             return true
         }
@@ -160,9 +172,21 @@ final class AgentToolCatalogStore: AgentToolCatalogProviding {
         ]
     )
 
+    private static let clockTimerManifest = AgentToolManifest(
+        toolID: AgentCapabilitySettings.clockTimerToolID,
+        displayName: "闹钟提醒",
+        description: "创建一次性闹钟提醒。适合“明早七点叫我起床”“今晚九点半提醒我开会”。",
+        examples: [
+            "明早七点叫我起床",
+            "今晚九点半提醒我开会",
+            "下周一 8 点设个闹钟"
+        ]
+    )
+
     private static let builtInManifests = [
         musicManifest,
-        calendarCreateEventManifest
+        calendarCreateEventManifest,
+        clockTimerManifest
     ]
 }
 
@@ -230,7 +254,14 @@ struct AgentRoutePromptBuilder {
         let systemPrompt = """
         你是 PulseType 的 Agent Router。你的唯一任务是把用户语音命令分配给一个工具。
 
-        严格规则：
+        软约束推理规则：
+        1. 先理解用户真实意图，再从候选工具里选最匹配的一项。
+        2. 可以做必要推理，但不能编造不存在的工具能力。
+        3. “闹钟、叫醒、提醒我几点响”这类更偏向 clock；“会议、行程、约会、日程安排”更偏向 calendar。
+        4. 如果语义有交叉，优先选择用户最终想要的结果：是“到点响铃提醒”还是“写入日程”。
+        5. 只做分流，不做参数提取和执行决策。
+
+        输出规则：
         1. 只能从候选工具的 tool_id 中选择一个。
         2. 只输出一行 JSON，格式必须是 {"tool_id":"候选工具ID"}。
         3. 不要输出解释、Markdown、代码块、自然语言或工具参数。

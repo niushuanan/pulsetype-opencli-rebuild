@@ -33,6 +33,37 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 12:05 - Router 软约束推理 + Calendar notes 补齐 + 新增 Clock 闹钟路径
+
+- 本次任务：按 Agent 新规划完成三件事：Router 改为软约束推理、Calendar 自动补齐备注、新增 `clock` 工具完整路径（前后端 + 测试）。
+- 改了哪些文件：
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `Sources/Core/Interaction/InteractionCoordinator.swift`
+  - `Sources/Core/AgentCalendar/AgentCalendarExecutor.swift`
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`（新增）
+  - `Sources/UI/SettingsView.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PulseType.xcodeproj/project.pbxproj`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - Router prompt 从“硬规则字面匹配”升级为“软约束语义推理”：仍只输出 `tool_id`，但允许模型在 `clock/calendar` 交叉语义里做真实判断，不再像本地规则硬判断。
+  - Agent 工具目录新增 `apple.clock.timer`，并增加对应能力开关 `agent.capability.clock.timer.enabled.v1`。
+  - Calendar 参数提取器强化 `notes`：模型侧要求补一句简短备注；如果模型漏填，执行层会自动按“标题+原始口令”补齐，避免内容字段长期为空。
+  - 新增 `AgentClockTimerExecutor`：
+    - 先用 Agent 执行模型把“闹钟口令”提取成结构化 JSON（`title/fire_at/notes`）。
+    - 再用本地通知中心（`UNUserNotificationCenter`）创建一次性闹钟提醒并写回证据（`apple.clock.timer|...`）。
+    - 保持一次性路径，不追问、不确认。
+  - `InteractionCoordinator` 新增 `clock` 分发分支，Router 选中后会调用 `agentClockExecutor`，并把路由证据 + 执行证据一起写历史/HUD。
+  - Agent 页面新增“闹钟提醒”开关行，保持极简列表样式。
+  - 测试新增 clock 全套覆盖：能力开关默认值、参数提取、执行器调度、Coordinator 路由到 clock。
+  - 由于新增源码文件，重新生成了 Xcode 工程（`xcodegen generate`）。
+- 为什么这样改：
+  - Router 需要给模型推理空间，避免“偶尔命中关键词就误分流”的僵化问题。
+  - Calendar 内容字段不能长期只有标题，notes 需要有可读上下文，便于后续复盘。
+  - Clock 是高频动作，必须有独立执行器和可观测证据，且结构上要能复用到后续更多工具。
+- 影响了哪些模块：
+  - Agent 路由策略、Agent 工具目录与能力开关、Calendar 参数质量、Clock 新工具链路、Agent 页面 UI、核心测试集合。
+
 ### 2026-05-18 11:23 - Calendar 改为严格一次性执行，不追问缺失信息
 
 - 本次任务：修正 Calendar 工具里“缺时间/标题可能失败或追问”的设计，改成一次性执行路径。
