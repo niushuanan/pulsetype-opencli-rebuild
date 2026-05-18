@@ -451,20 +451,17 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(result.notes, "提醒起床")
     }
 
-    func testClockParameterExtractorUsesModelSummarizedTitleWhenPrimaryTitleIsEmpty() async throws {
+    func testClockParameterExtractorFallsBackToDefaultWhenPrimaryTitleIsEmpty() async throws {
         let extractor = LLMAgentClockParameterExtractor(
             generationProvider: FakeTextGenerationProvider(
-                outputs: [
-                    """
-                    {
-                      "action": "create_one_shot_alarm",
-                      "title": "",
-                      "fire_at": "2026-05-23T07:00:00+08:00",
-                      "notes": "提醒起床"
-                    }
-                    """,
-                    "晨间上课提醒"
-                ]
+                output: """
+                {
+                  "action": "create_one_shot_alarm",
+                  "title": "",
+                  "fire_at": "2026-05-23T07:00:00+08:00",
+                  "notes": "提醒起床"
+                }
+                """
             )
         )
 
@@ -478,7 +475,7 @@ final class PulseTypeCoreTests: XCTestCase {
             apiKey: "text-key-123456"
         )
 
-        XCTAssertEqual(result.title, "晨间上课提醒")
+        XCTAssertEqual(result.title, "闹钟提醒")
     }
 
     func testClockExecutorRunsClockAppleScriptAfterModelExtraction() async throws {

@@ -81,13 +81,7 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         let payload = try parsePayload(from: generation.outputText)
 
         let action = oneShotAction(from: payload.action)
-        let title = try await oneShotTitle(
-            from: payload.title,
-            command: normalizedCommand,
-            request: request,
-            configuration: configuration,
-            apiKey: apiKey
-        )
+        let title = oneShotTitle(from: payload.title)
         let fireAt = oneShotFireAt(from: payload.fireAt, request: request)
         let notes = oneShotNotes(from: payload.notes, title: title, command: normalizedCommand)
 
@@ -107,7 +101,7 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         2. 输出字段必须包含 action、title、fire_at、notes。
         3. fire_at 必须是 ISO-8601，例如 2026-05-23T09:00:00+08:00。
         4. 这是一次性路径，不追问、不确认。
-        5. 如果缺少标题，你要基于语义生成短标题。
+        5. title 必须是你概括后的短标题，禁止留空、禁止照抄整句口令。
         6. 如果缺少具体日期或时间，你要结合当前参考时间推理一个未来时间。
         7. notes 要补成一句简短备注，说明提醒目的。
         8. action 只能是 create_one_shot_alarm。
@@ -155,25 +149,9 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    private func oneShotTitle(
-        from value: String?,
-        command: String,
-        request: AgentClockParameterExtractionRequest,
-        configuration: TextGenerationProviderConfiguration,
-        apiKey: String
-    ) async throws -> String {
+    private func oneShotTitle(from value: String?) -> String {
         let normalized = trimmed(value)
-        guard normalized.isEmpty else {
-            return normalized
-        }
-        let fallback = try await summarizeTitleByModel(
-            command: command,
-            referenceDate: request.referenceDate,
-            timeZone: request.timeZone,
-            configuration: configuration,
-            apiKey: apiKey
-        )
-        return fallback.isEmpty ? "闹钟提醒" : fallback
+        return normalized.isEmpty ? "闹钟提醒" : normalized
     }
 
     private func oneShotAction(from value: String?) -> String {
@@ -207,50 +185,6 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         return Date(timeIntervalSince1970: rounded)
     }
 
-    private func summarizeTitleByModel(
-        command: String,
-        referenceDate: Date,
-        timeZone: TimeZone,
-        configuration: TextGenerationProviderConfiguration,
-        apiKey: String
-    ) async throws -> String {
-        let referenceText = AgentClockDateFormatter.iso8601.string(from: referenceDate)
-        let titleRequest = TextGenerationRequest(
-            systemPrompt: """
-            你是闹钟标题概括器。请把用户口令概括成一个简短闹钟标题。
-            规则：
-            1. 只输出标题纯文本，不要 JSON、解释、引号、代码块。
-            2. 标题控制在 4 到 12 个中文字符，信息清晰。
-            """,
-            userPrompt: """
-            当前参考时间：\(referenceText)
-            当前时区：\(timeZone.identifier)
-            用户口令：\(command)
-            """,
-            temperature: 0,
-            maxOutputTokens: 32
-        )
-        let generation = try await generationProvider.generateText(
-            request: titleRequest,
-            configuration: configuration,
-            apiKey: apiKey
-        )
-        return sanitizeModelTitle(generation.outputText)
-    }
-
-    private func sanitizeModelTitle(_ raw: String) -> String {
-        var normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalized.hasPrefix("\""), normalized.hasSuffix("\""), normalized.count >= 2 {
-            normalized = String(normalized.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        if normalized.hasPrefix("“"), normalized.hasSuffix("”"), normalized.count >= 2 {
-            normalized = String(normalized.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        if normalized.count > 20 {
-            normalized = String(normalized.prefix(20))
-        }
-        return normalized
-    }
 }
 
 struct AgentClockTimerExecutionRequest {

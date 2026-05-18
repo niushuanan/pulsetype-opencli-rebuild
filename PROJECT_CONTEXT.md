@@ -33,6 +33,23 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 13:33 - Clock 标题改为首轮必产出，移除二次模型调用
+
+- 本次任务：按用户要求把 clock 标题逻辑收敛到第一次参数提取，不再做第二次模型调用。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 删除了“title 为空时再调用一次模型概括标题”的分支。
+  - 强化首轮 prompt：`title` 必须是概括后的短标题，禁止留空，禁止照抄整句口令。
+  - 保留本地最终兜底：若模型仍返回空标题，则使用 `闹钟提醒`，避免空标签落地。
+  - 测试调整为验证“空 title 走本地兜底”。
+- 为什么这样改：
+  - 用户明确要求标题概括应在第一次模型调用完成，链路应单次收敛，避免额外调用和不必要复杂度。
+- 影响了哪些模块：
+  - Agent clock 参数提取逻辑、clock 标题容错路径、clock 单测预期。
+
 ### 2026-05-18 13:20 - 修复 Clock 假失败并改为模型层标题概括
 
 - 本次任务：处理“实际已创建闹钟但返回失败”的问题，并保证时钟标签标题来自大模型概括。
