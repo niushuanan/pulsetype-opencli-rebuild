@@ -33,6 +33,24 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 09:57 - Agent 播放路径提速（去掉队列重建/扫描）并清理证据重复字段
+
+- 本次任务：针对“播放命令明显变慢”的反馈做提速优化，保持资料库顺序语义不变。
+- 改了哪些文件：
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - `runPlay(query:)` 从“旋转队列复用/重建模式”改为“资料库直达播放模式”：
+    - 保留资料库检索与顺序锚定语义（`selection_source=library|queue_anchor=library_order`）。
+    - 移除每次播放时的队列扫描、队列完整性校验和可能的队列重建，减少大库下的额外耗时。
+    - 保留短轮询稳态确认，只在确认进入 `playing` 后返回成功；否则带上 `target_matched_but_inactive` 或 `play_mismatch` 证据。
+  - 证据拼接处增加去重：如果 AppleScript 回传里已经有 `requested_track=...`，上层不再重复追加。
+- 为什么这样改：
+  - 真实日志显示主要慢在 `asr.success -> agent.music.*` 阶段，典型 4s+，不是 ASR 慢。
+  - 慢点来自播放工具层的“全库+队列”重操作；改成资料库直达可显著缩短执行时间，同时保留顺序控制能力。
+- 影响了哪些模块：
+  - Agent 音乐执行器 `play` 路径性能、执行证据可读性。
+
 ### 2026-05-18 09:50 - 播放确认逻辑下沉到 AppleScript，移除 Swift 临时补丁
 
 - 本次任务：按真实触发链路修复“命中目标歌曲但被判失败”的问题，并避免在 Swift 层继续堆补丁。

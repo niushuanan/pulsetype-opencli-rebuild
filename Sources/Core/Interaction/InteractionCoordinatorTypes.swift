@@ -333,8 +333,6 @@ protocol AgentMusicControlling {
 
 @MainActor
 final class AgentMusicControlExecutor: AgentMusicControlling {
-    private static let lockedQueuePlaylistName = "PulseType Agent Library Queue"
-
     private enum Action: String {
         case open
         case play
@@ -569,7 +567,6 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
                 lines: [
                     "on run argv",
                     "set requestedQuery to item 1 of argv",
-                    "set queueName to item 2 of argv",
                     "tell application \"Music\"",
                     "activate",
                     "try",
@@ -604,89 +601,15 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
                     "set targetName to (name of targetTrack) as string",
                     "set targetArtist to (artist of targetTrack) as string",
                     "set targetAlbum to (album of targetTrack) as string",
-                    "if (exists user playlist queueName) then",
-                    "set queuePlaylist to user playlist queueName",
-                    "set queueTracks to tracks of queuePlaylist",
-                    "set queueCount to count of queueTracks",
-                    "if queueCount is totalCount then",
-                    "set queueTrack to missing value",
-                    "repeat with candidateTrack in queueTracks",
-                    "try",
-                    "if ((persistent ID of candidateTrack) as string) is targetID then",
-                    "set queueTrack to candidateTrack",
-                    "exit repeat",
-                    "end if",
-                    "end try",
-                    "end repeat",
-                    "if queueTrack is not missing value then",
                     "set finalState to \"unknown\"",
                     "set lastNowName to \"\"",
                     "set lastNowArtist to \"\"",
                     "set lastNowAlbum to \"\"",
                     "set lastNowID to \"\"",
                     "set matchedTargetButInactive to false",
-                    "play queueTrack",
-                    "repeat with attemptIndex from 1 to 10",
-                    "delay 0.24",
-                    "set finalState to (player state as string)",
-                    "try",
-                    "set nowTrack to current track",
-                    "set lastNowName to (name of nowTrack) as string",
-                    "set lastNowArtist to (artist of nowTrack) as string",
-                    "set lastNowAlbum to (album of nowTrack) as string",
-                    "set lastNowID to (persistent ID of nowTrack) as string",
-                    "if lastNowID is targetID then",
-                    "if finalState is \"playing\" or finalState is \"play\" then",
-                    "return \"requested_track=\" & requestedQuery & \"|selection_source=library\" & \"|queue_anchor=library_order\" & \"|queue_mode=playlist_rotation\" & \"|queue_reused=true\" & \"|shuffle=false\" & \"|track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState",
-                    "else",
-                    "set matchedTargetButInactive to true",
-                    "end if",
-                    "end if",
-                    "end try",
-                    "if attemptIndex is 4 then",
-                    "try",
-                    "play queueTrack",
-                    "end try",
-                    "end if",
-                    "end repeat",
-                    "if lastNowName is not \"\" then",
-                    "if matchedTargetButInactive then",
-                    "return \"requested_track=\" & requestedQuery & \"|selection_source=library\" & \"|queue_anchor=library_order\" & \"|queue_mode=playlist_rotation\" & \"|queue_reused=true\" & \"|shuffle=false\" & \"|track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|target_matched_but_inactive=true\"",
-                    "end if",
-                    "return \"requested_track=\" & requestedQuery & \"|selection_source=library\" & \"|queue_anchor=library_order\" & \"|queue_mode=playlist_rotation\" & \"|queue_reused=true\" & \"|shuffle=false\" & \"|track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|play_mismatch=true|target_track=\" & targetName & \"|target_artist=\" & targetArtist & \"|target_album=\" & targetAlbum",
-                    "end if",
-                    "end if",
-                    "end if",
-                    "end if",
-                    "if not (exists user playlist queueName) then",
-                    "make new user playlist with properties {name:queueName}",
-                    "end if",
-                    "set queuePlaylist to user playlist queueName",
-                    "try",
-                    "delete every track of queuePlaylist",
-                    "on error",
-                    "repeat while (count of tracks of queuePlaylist) > 0",
-                    "delete item 1 of tracks of queuePlaylist",
-                    "end repeat",
-                    "end try",
-                    "repeat with offsetIndex from 0 to (totalCount - 1)",
-                    "set sourceIndex to targetIndex + offsetIndex",
-                    "if sourceIndex > totalCount then set sourceIndex to sourceIndex - totalCount",
-                    "duplicate (item sourceIndex of allTracks) to queuePlaylist",
-                    "end repeat",
-                    "set queueCount to count of tracks of queuePlaylist",
-                    "if queueCount is 0 then",
-                    "return \"queue_build_failed|requested_track=\" & requestedQuery",
-                    "end if",
-                    "set finalState to \"unknown\"",
-                    "set lastNowName to \"\"",
-                    "set lastNowArtist to \"\"",
-                    "set lastNowAlbum to \"\"",
-                    "set lastNowID to \"\"",
-                    "set matchedTargetButInactive to false",
-                    "play queuePlaylist",
+                    "play targetTrack",
                     "repeat with attemptIndex from 1 to 8",
-                    "delay 0.28",
+                    "delay 0.18",
                     "set finalState to (player state as string)",
                     "try",
                     "set nowTrack to current track",
@@ -696,7 +619,7 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
                     "set lastNowID to (persistent ID of nowTrack) as string",
                     "if lastNowID is targetID then",
                     "if finalState is \"playing\" or finalState is \"play\" then",
-                    "return \"requested_track=\" & requestedQuery & \"|selection_source=library\" & \"|queue_anchor=library_order\" & \"|queue_mode=playlist_rotation\" & \"|queue_reused=false\" & \"|shuffle=false\" & \"|track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState",
+                    "return \"requested_track=\" & requestedQuery & \"|selection_source=library\" & \"|queue_anchor=library_order\" & \"|queue_mode=library_direct\" & \"|shuffle=false\" & \"|track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState",
                     "else",
                     "set matchedTargetButInactive to true",
                     "end if",
@@ -704,21 +627,21 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
                     "end try",
                     "if attemptIndex is 4 then",
                     "try",
-                    "play queuePlaylist",
+                    "play targetTrack",
                     "end try",
                     "end if",
                     "end repeat",
                     "if lastNowName is not \"\" then",
                     "if matchedTargetButInactive then",
-                    "return \"requested_track=\" & requestedQuery & \"|selection_source=library\" & \"|queue_anchor=library_order\" & \"|queue_mode=playlist_rotation\" & \"|queue_reused=false\" & \"|shuffle=false\" & \"|track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|target_matched_but_inactive=true\"",
+                    "return \"requested_track=\" & requestedQuery & \"|selection_source=library\" & \"|queue_anchor=library_order\" & \"|queue_mode=library_direct\" & \"|shuffle=false\" & \"|track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|target_matched_but_inactive=true\"",
                     "end if",
-                    "return \"requested_track=\" & requestedQuery & \"|selection_source=library\" & \"|queue_anchor=library_order\" & \"|queue_mode=playlist_rotation\" & \"|shuffle=false\" & \"|track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|play_mismatch=true|target_track=\" & targetName & \"|target_artist=\" & targetArtist & \"|target_album=\" & targetAlbum",
+                    "return \"requested_track=\" & requestedQuery & \"|selection_source=library\" & \"|queue_anchor=library_order\" & \"|queue_mode=library_direct\" & \"|shuffle=false\" & \"|track=\" & lastNowName & \"|artist=\" & lastNowArtist & \"|album=\" & lastNowAlbum & \"|state=\" & finalState & \"|play_mismatch=true|target_track=\" & targetName & \"|target_artist=\" & targetArtist & \"|target_album=\" & targetAlbum",
                     "end if",
                     "return \"play_mismatch|requested_track=\" & requestedQuery & \"|target_track=\" & targetName & \"|target_artist=\" & targetArtist & \"|target_album=\" & targetAlbum & \"|state=\" & finalState",
                     "end tell",
                     "end run"
                 ],
-                arguments: [query, Self.lockedQueuePlaylistName]
+                arguments: [query]
             )
         }
 
@@ -924,16 +847,19 @@ final class AgentMusicControlExecutor: AgentMusicControlling {
         rawEvidence: String,
         query: String?
     ) -> String {
+        let trimmed = rawEvidence.trimmingCharacters(in: .whitespacesAndNewlines)
         var fields = [
             "apple.music.control",
             "fast_path=true",
             "trace_id=\(traceID)",
             "action=\(action.rawValue)"
         ]
-        if let query = normalizedNonEmpty(query) {
+        if
+            let query = normalizedNonEmpty(query),
+            !trimmed.contains("requested_track=")
+        {
             fields.append("requested_track=\(sanitizeEvidenceValue(query))")
         }
-        let trimmed = rawEvidence.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             fields.append(trimmed)
         }
