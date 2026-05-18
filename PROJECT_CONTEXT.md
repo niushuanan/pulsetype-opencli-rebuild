@@ -33,6 +33,22 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 13:06 - 强化 Clock UI 自动化路径，改成 24 小时制输入并补齐多层兜底
+
+- 本次任务：继续修复 `clock` 在不同系统语言和不同 UI 层级下偶发失败的问题，提升真实创建闹钟成功率。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 时间输入改成 24 小时制（`HH:mm`），避免 AM/PM 文案受系统语言影响导致输入失败。
+  - 进入闹钟页的方式从“遍历 toolbar/button 名称”改成“先走菜单 View/显示”，并提供中英文菜单兜底。
+  - 新建闹钟、填写时间、填写标题、点击保存都改成多路径尝试：优先 `sheet`，失败再退回 `window` 级别控件。
+  - 保存后前后闹钟数量验证逻辑改成基于 `identifier/description` 统计，继续确保不会误报成功。
+- 为什么这样改：
+  - 之前路径对 UI 结构和文案命名依赖太强，遇到系统差异容易失效；本次改造重点是“降低控件路径脆弱性”。
+- 影响了哪些模块：
+  - Agent clock 的 AppleScript 执行稳定性、跨语言兼容性、成功判定可靠性。
+
 ### 2026-05-18 12:40 - 修复 clock AppleScript 语法错误（-2741）
 
 - 本次任务：修复 `clock` 路径在真实执行时触发的 `syntax error (-2741)`，并保证脚本可编译执行。
