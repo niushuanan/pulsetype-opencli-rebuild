@@ -33,6 +33,23 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 09:50 - 播放确认逻辑下沉到 AppleScript，移除 Swift 临时补丁
+
+- 本次任务：按真实触发链路修复“命中目标歌曲但被判失败”的问题，并避免在 Swift 层继续堆补丁。
+- 改了哪些文件：
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - `runPlay(query:)` 的 `queue_reused=true` 分支从“单次 delay + 单次读状态”改为“最多 10 次短轮询确认播放态”，并在第 4 次尝试时补发一次 `play queueTrack`。
+  - `queue_reused=false` 分支同步改成“只有 `state=playing/play` 才提前成功返回”；若只是命中目标但仍非播放态，继续轮询，不再过早返回。
+  - 失败证据新增 `target_matched_but_inactive=true`，用于区分“没命中目标”和“命中目标但播放态没稳定”两类问题。
+  - 移除了 Swift 执行层的 `runResume()` 临时补救路径，恢复为“执行层只解释结果，稳态确认由 AppleScript 一层完成”。
+- 为什么这样改：
+  - 根因是播放态读取时序抖动，最稳的修复点在 AppleScript 执行层，而不是在上层继续叠逻辑。
+  - 统一在工具层完成确认后，代码职责更清晰，后续扩展路由和多工具也更容易维护。
+- 影响了哪些模块：
+  - Agent 音乐执行器 `play` 路径、播放态确认策略、失败证据结构。
+
 ### 2026-05-18 09:44 - 播放后误判失败修复（state=stopped 自动补救）
 
 - 本次任务：修复 Agent 音乐播放里“已经选中目标歌曲，但历史仍报播放失败”的问题。
