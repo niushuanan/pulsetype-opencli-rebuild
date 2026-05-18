@@ -3,6 +3,7 @@ import Foundation
 
 enum AgentCapabilitySettings {
     static let musicControlEnabledKey = "agent.capability.music.enabled.v1"
+    static let musicControlToolID = "apple.music.control"
 
     static func isMusicControlEnabled(defaults: UserDefaults = .standard) -> Bool {
         guard defaults.object(forKey: musicControlEnabledKey) != nil else {
@@ -10,6 +11,330 @@ enum AgentCapabilitySettings {
         }
         return defaults.bool(forKey: musicControlEnabledKey)
     }
+}
+
+struct AgentToolManifest: Codable, Equatable, Identifiable {
+    let toolID: String
+    let displayName: String
+    let description: String
+    let examples: [String]
+
+    var id: String { toolID }
+
+    enum CodingKeys: String, CodingKey {
+        case toolID = "tool_id"
+        case displayName = "display_name"
+        case description
+        case examples
+    }
+}
+
+@MainActor
+protocol AgentToolCatalogProviding {
+    func loadEnabledTools() -> [AgentToolManifest]
+}
+
+@MainActor
+final class AgentToolCatalogStore: AgentToolCatalogProviding {
+    private let toolsDirectory: URL
+    private let defaults: UserDefaults
+    private let fileManager: FileManager
+
+    init(
+        toolsDirectory: URL? = nil,
+        defaults: UserDefaults = .standard,
+        fileManager: FileManager = .default
+    ) {
+        self.toolsDirectory = toolsDirectory ?? Self.defaultToolsDirectory(fileManager: fileManager)
+        self.defaults = defaults
+        self.fileManager = fileManager
+    }
+
+    func loadEnabledTools() -> [AgentToolManifest] {
+        bootstrapBuiltInToolsIfNeeded()
+
+        var manifestsByID: [String: AgentToolManifest] = [
+            Self.musicManifest.toolID: Self.musicManifest
+        ]
+
+        let toolDirectories = (try? fileManager.contentsOfDirectory(
+            at: toolsDirectory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        for directory in toolDirectories {
+            guard isDirectory(directory) else {
+                continue
+            }
+            let manifestURL = directory.appendingPathComponent("manifest.json", isDirectory: false)
+            guard
+                let data = try? Data(contentsOf: manifestURL),
+                let manifest = try? JSONDecoder().decode(AgentToolManifest.self, from: data),
+                !manifest.toolID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                continue
+            }
+            manifestsByID[manifest.toolID] = manifest
+        }
+
+        return manifestsByID.values
+            .filter { isEnabled(toolID: $0.toolID) }
+            .sorted { $0.toolID < $1.toolID }
+    }
+
+    private func bootstrapBuiltInToolsIfNeeded() {
+        try? fileManager.createDirectory(at: toolsDirectory, withIntermediateDirectories: true)
+
+        let musicDirectory = toolsDirectory.appendingPathComponent(
+            AgentCapabilitySettings.musicControlToolID,
+            isDirectory: true
+        )
+        let manifestURL = musicDirectory.appendingPathComponent("manifest.json", isDirectory: false)
+        guard !fileManager.fileExists(atPath: manifestURL.path) else {
+            return
+        }
+
+        do {
+            try fileManager.createDirectory(at: musicDirectory, withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(Self.musicManifest)
+            try data.write(to: manifestURL, options: [.atomic])
+        } catch {
+            // 写入失败不影响运行，内置 manifest 会作为内存兜底继续参与路由。
+        }
+    }
+
+    private func isEnabled(toolID: String) -> Bool {
+        switch toolID {
+        case AgentCapabilitySettings.musicControlToolID:
+            return AgentCapabilitySettings.isMusicControlEnabled(defaults: defaults)
+        default:
+            return true
+        }
+    }
+
+    private func isDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+    }
+
+    private static func defaultToolsDirectory(fileManager: FileManager) -> URL {
+        let baseDirectory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return baseDirectory
+            .appendingPathComponent("PulseType", isDirectory: true)
+            .appendingPathComponent("AgentTools", isDirectory: true)
+    }
+
+    private static let musicManifest = AgentToolManifest(
+        toolID: AgentCapabilitySettings.musicControlToolID,
+        displayName: "音乐控制",
+        description: "控制 Apple Music。适合播放指定歌曲、打开音乐、暂停、继续、上一首、下一首，并尽量从用户资料库执行。",
+        examples: [
+            "播放稻香",
+            "暂停音乐",
+            "下一首"
+        ]
+    )
+}
+
+struct AgentRouteRequest: Equatable {
+    let traceID: String
+    let command: String
+    let tools: [AgentToolManifest]
+}
+
+struct AgentRouteOutcome: Equatable {
+    let traceID: String
+    let toolID: String
+    let providerName: String
+    let modelName: String
+    let rawOutput: String
+    let latencyMilliseconds: Int
+
+    var evidenceSummary: String {
+        [
+            "agent.route",
+            "trace_id=\(sanitizeAgentEvidenceValue(traceID))",
+            "tool_id=\(sanitizeAgentEvidenceValue(toolID))",
+            "provider=\(sanitizeAgentEvidenceValue(providerName))",
+            "model=\(sanitizeAgentEvidenceValue(modelName))",
+            "latency_ms=\(latencyMilliseconds)"
+        ].joined(separator: "|")
+    }
+}
+
+enum AgentRouteError: LocalizedError, Equatable {
+    case emptyCommand
+    case noCandidateTools
+    case invalidModelOutput(String)
+    case unknownToolID(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyCommand:
+            return "没有识别到可执行的 Agent 指令。"
+        case .noCandidateTools:
+            return "当前没有可用 Agent 功能，请先到 Agent 页面打开功能。"
+        case let .invalidModelOutput(output):
+            let normalized = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if normalized.isEmpty {
+                return "Agent Router 没有返回可用工具。"
+            }
+            return "Agent Router 返回格式不正确：\(normalized)"
+        case let .unknownToolID(toolID):
+            return "Agent Router 选择了当前版本不支持的工具：\(toolID)。"
+        }
+    }
+}
+
+@MainActor
+protocol AgentToolRouting {
+    func route(
+        request: AgentRouteRequest,
+        configuration: TextGenerationProviderConfiguration,
+        apiKey: String
+    ) async throws -> AgentRouteOutcome
+}
+
+struct AgentRoutePromptBuilder {
+    func build(request: AgentRouteRequest) -> TextGenerationRequest {
+        let systemPrompt = """
+        你是 PulseType 的 Agent Router。你的唯一任务是把用户语音命令分配给一个工具。
+
+        严格规则：
+        1. 只能从候选工具的 tool_id 中选择一个。
+        2. 只输出一行 JSON，格式必须是 {"tool_id":"候选工具ID"}。
+        3. 不要输出解释、Markdown、代码块、自然语言或工具参数。
+        4. 不要改写用户命令，不要生成执行步骤。
+        5. 如果候选工具不完全匹配，也必须选择最接近的候选工具。
+        """
+
+        let toolLines = request.tools.map { tool in
+            let examples = tool.examples.isEmpty ? "无" : tool.examples.joined(separator: "；")
+            return """
+            - tool_id: \(tool.toolID)
+              name: \(tool.displayName)
+              description: \(tool.description)
+              examples: \(examples)
+            """
+        }.joined(separator: "\n")
+
+        let userPrompt = """
+        用户命令：
+        <<<COMMAND
+        \(request.command)
+        COMMAND>>>
+
+        候选工具：
+        \(toolLines)
+        """
+
+        return TextGenerationRequest(
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            temperature: 0,
+            maxOutputTokens: 80
+        )
+    }
+}
+
+struct LLMAgentToolRouter: AgentToolRouting {
+    private let generationProvider: any TextGenerationProvider
+    private let promptBuilder: AgentRoutePromptBuilder
+
+    init(
+        generationProvider: any TextGenerationProvider = OpenAITextGenerationProvider(),
+        promptBuilder: AgentRoutePromptBuilder = AgentRoutePromptBuilder()
+    ) {
+        self.generationProvider = generationProvider
+        self.promptBuilder = promptBuilder
+    }
+
+    func route(
+        request: AgentRouteRequest,
+        configuration: TextGenerationProviderConfiguration,
+        apiKey: String
+    ) async throws -> AgentRouteOutcome {
+        let normalizedCommand = request.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedCommand.isEmpty else {
+            throw AgentRouteError.emptyCommand
+        }
+        guard !request.tools.isEmpty else {
+            throw AgentRouteError.noCandidateTools
+        }
+
+        let startedAt = Date()
+        let generation = try await generationProvider.generateText(
+            request: promptBuilder.build(
+                request: AgentRouteRequest(
+                    traceID: request.traceID,
+                    command: normalizedCommand,
+                    tools: request.tools
+                )
+            ),
+            configuration: configuration,
+            apiKey: apiKey
+        )
+        let latencyMilliseconds = max(0, Int(Date().timeIntervalSince(startedAt) * 1_000))
+        let toolID = try parseToolID(from: generation.outputText)
+
+        guard request.tools.contains(where: { $0.toolID == toolID }) else {
+            throw AgentRouteError.unknownToolID(toolID)
+        }
+
+        return AgentRouteOutcome(
+            traceID: request.traceID,
+            toolID: toolID,
+            providerName: generation.providerName,
+            modelName: generation.modelName,
+            rawOutput: generation.outputText,
+            latencyMilliseconds: latencyMilliseconds
+        )
+    }
+
+    private func parseToolID(from output: String) throws -> String {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw AgentRouteError.invalidModelOutput(output)
+        }
+
+        let direct = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`"))
+        if !direct.contains("{"), !direct.contains(" "), !direct.contains("\n"), direct.contains(".") {
+            return direct
+        }
+
+        guard
+            let startIndex = trimmed.firstIndex(of: "{"),
+            let endIndex = trimmed.lastIndex(of: "}"),
+            startIndex <= endIndex
+        else {
+            throw AgentRouteError.invalidModelOutput(output)
+        }
+
+        let jsonText = String(trimmed[startIndex...endIndex])
+        guard
+            let data = jsonText.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let rawToolID = (object["tool_id"] as? String) ?? (object["toolID"] as? String)
+        else {
+            throw AgentRouteError.invalidModelOutput(output)
+        }
+
+        let toolID = rawToolID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !toolID.isEmpty else {
+            throw AgentRouteError.invalidModelOutput(output)
+        }
+        return toolID
+    }
+}
+
+private func sanitizeAgentEvidenceValue(_ value: String) -> String {
+    value
+        .replacingOccurrences(of: "|", with: "/")
+        .replacingOccurrences(of: "\n", with: " ")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 struct WakeInvocationContext: Equatable {

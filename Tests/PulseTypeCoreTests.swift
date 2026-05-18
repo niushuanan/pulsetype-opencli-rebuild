@@ -234,6 +234,126 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(sessionStore.phase, .idle)
     }
 
+    func testLLMAgentRouterParsesSelectedToolIDFromModelJSON() async throws {
+        let router = LLMAgentToolRouter(
+            generationProvider: FakeTextGenerationProvider(
+                output: "{\"tool_id\":\"\(AgentCapabilitySettings.musicControlToolID)\"}"
+            )
+        )
+
+        let outcome = try await router.route(
+            request: AgentRouteRequest(
+                traceID: "trace-1",
+                command: "播放稻香",
+                tools: [Self.musicToolManifest]
+            ),
+            configuration: makeTextGenerationConfiguration(),
+            apiKey: "text-key-123456"
+        )
+
+        XCTAssertEqual(outcome.toolID, AgentCapabilitySettings.musicControlToolID)
+        XCTAssertEqual(outcome.providerName, "OpenAI 兼容")
+        XCTAssertEqual(outcome.modelName, "deepseek-v4-flash")
+        XCTAssertTrue(outcome.evidenceSummary.contains("agent.route"))
+    }
+
+    func testInteractionCoordinatorRoutesAgentCommandBeforeExecutingMusicTool() async throws {
+        let directory = makeTemporaryDirectory()
+        let credentials = MemoryCredentialStore()
+        try credentials.saveAPIKey("asr-key-123456", for: defaultASRCredentialKeyRef)
+        try credentials.saveAPIKey("text-key-123456", for: defaultTextCredentialKeyRef)
+
+        let sessionStore = SessionStore()
+        let historyStore = LocalHistoryStore(historyDirectory: directory.appendingPathComponent("History"))
+        let router = FakeAgentToolRouter(toolID: AgentCapabilitySettings.musicControlToolID)
+        let musicExecutor = FakeAgentMusicExecutor(
+            outcome: AgentMusicExecutionOutcome(
+                status: .success,
+                message: "已执行音乐。",
+                outputText: "已执行音乐。",
+                evidenceSummary: "apple.music.control|fake=true"
+            )
+        )
+        let coordinator = InteractionCoordinator(
+            sessionStore: sessionStore,
+            permissionsCenter: PermissionsCenter(
+                microphoneStateResolver: { .granted },
+                accessibilityStateResolver: { .granted }
+            ),
+            audioCaptureService: FakeAudioCaptureService(directory: directory),
+            providerSettingsStore: ProviderSettingsStore(
+                defaults: makeDefaults(),
+                credentialStore: credentials
+            ),
+            providerRegistry: SpeechProviderRegistry(providers: [FakeTranscriptionProvider()]),
+            textOutputCoordinator: FakeTextOutputCoordinator(),
+            contextDetector: FixedContextDetector(),
+            localHistoryStore: historyStore,
+            speechPipelineLogger: SpeechPipelineLogger(diagnosticsDirectory: directory.appendingPathComponent("Diagnostics")),
+            dictationPostProcessor: FakeDictationPostProcessor(output: "不会走普通听写整理"),
+            agentRouter: router,
+            agentToolCatalog: FakeAgentToolCatalog(tools: [Self.musicToolManifest]),
+            agentMusicExecutor: musicExecutor
+        )
+
+        coordinator.handleWakeInput(context: .agentHold)
+        XCTAssertEqual(sessionStore.phase, .listening)
+        coordinator.handleWakeInput(context: .agentHold)
+
+        try await waitUntil { historyStore.entries.count == 1 }
+        XCTAssertEqual(router.requests.first?.command, "ASR 原文")
+        XCTAssertEqual(musicExecutor.requests.first?.command, "ASR 原文")
+        XCTAssertEqual(historyStore.entries.first?.mode, .agent)
+        XCTAssertEqual(historyStore.entries.first?.status, .success)
+        XCTAssertEqual(historyStore.entries.first?.outputText, "已执行音乐。")
+        XCTAssertEqual(historyStore.entries.first?.textProcessingModel, "deepseek-v4-flash")
+        XCTAssertTrue(historyStore.entries.first?.agentEvidenceSummary?.contains("agent.route") == true)
+        XCTAssertTrue(historyStore.entries.first?.agentEvidenceSummary?.contains("apple.music.control|fake=true") == true)
+        XCTAssertEqual(sessionStore.phase, .idle)
+    }
+
+    func testInteractionCoordinatorFailsAgentWhenNoToolsAreEnabled() async throws {
+        let directory = makeTemporaryDirectory()
+        let credentials = MemoryCredentialStore()
+        try credentials.saveAPIKey("asr-key-123456", for: defaultASRCredentialKeyRef)
+
+        let sessionStore = SessionStore()
+        let historyStore = LocalHistoryStore(historyDirectory: directory.appendingPathComponent("History"))
+        let router = FakeAgentToolRouter(toolID: AgentCapabilitySettings.musicControlToolID)
+        let coordinator = InteractionCoordinator(
+            sessionStore: sessionStore,
+            permissionsCenter: PermissionsCenter(
+                microphoneStateResolver: { .granted },
+                accessibilityStateResolver: { .granted }
+            ),
+            audioCaptureService: FakeAudioCaptureService(directory: directory),
+            providerSettingsStore: ProviderSettingsStore(
+                defaults: makeDefaults(),
+                credentialStore: credentials
+            ),
+            providerRegistry: SpeechProviderRegistry(providers: [FakeTranscriptionProvider()]),
+            textOutputCoordinator: FakeTextOutputCoordinator(),
+            contextDetector: FixedContextDetector(),
+            localHistoryStore: historyStore,
+            speechPipelineLogger: SpeechPipelineLogger(diagnosticsDirectory: directory.appendingPathComponent("Diagnostics")),
+            dictationPostProcessor: FakeDictationPostProcessor(output: "不会走普通听写整理"),
+            agentRouter: router,
+            agentToolCatalog: FakeAgentToolCatalog(tools: []),
+            agentMusicExecutor: FakeAgentMusicExecutor()
+        )
+
+        coordinator.handleWakeInput(context: .agentHold)
+        coordinator.handleWakeInput(context: .agentHold)
+
+        try await waitUntil { historyStore.entries.count == 1 }
+        XCTAssertTrue(router.requests.isEmpty)
+        XCTAssertEqual(historyStore.entries.first?.mode, .agent)
+        XCTAssertEqual(historyStore.entries.first?.status, .failed)
+        XCTAssertEqual(historyStore.entries.first?.errorMessage, AgentRouteError.noCandidateTools.localizedDescription)
+        XCTAssertTrue(historyStore.entries.first?.agentEvidenceSummary?.contains("error=no_enabled_tools") == true)
+        XCTAssertEqual(sessionStore.phase, .error)
+    }
+
     func testCancelIgnoredAfterSessionAlreadyCancelled() {
         let directory = makeTemporaryDirectory()
         let sessionStore = SessionStore()
@@ -278,6 +398,23 @@ final class PulseTypeCoreTests: XCTestCase {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
+
+    private func makeTextGenerationConfiguration() -> TextGenerationProviderConfiguration {
+        TextGenerationProviderConfiguration(
+            profileID: defaultTextCredentialKeyRef,
+            providerType: .openAICompatible,
+            providerName: "OpenAI 兼容",
+            modelName: "deepseek-v4-flash",
+            baseURL: URL(string: "https://api.deepseek.com")!
+        )
+    }
+
+    private static let musicToolManifest = AgentToolManifest(
+        toolID: AgentCapabilitySettings.musicControlToolID,
+        displayName: "音乐控制",
+        description: "控制 Apple Music 播放、暂停、继续和切歌。",
+        examples: ["播放稻香", "下一首"]
+    )
 
     private func waitUntil(
         timeoutNanoseconds: UInt64 = 2_000_000_000,
@@ -442,5 +579,88 @@ struct FakeDictationPostProcessor: DictationPostProcessor {
             providerName: configuration.providerName,
             modelName: configuration.modelName
         )
+    }
+}
+
+final class FakeTextGenerationProvider: TextGenerationProvider, @unchecked Sendable {
+    let supportedProviderTypes: [ProviderType] = [.openAICompatible]
+    private let output: String
+
+    init(output: String) {
+        self.output = output
+    }
+
+    func generateText(
+        request _: TextGenerationRequest,
+        configuration: TextGenerationProviderConfiguration,
+        apiKey _: String
+    ) async throws -> TextGenerationResult {
+        TextGenerationResult(
+            providerType: configuration.providerType,
+            providerName: configuration.providerName,
+            modelName: configuration.modelName,
+            outputText: output
+        )
+    }
+}
+
+@MainActor
+final class FakeAgentToolCatalog: AgentToolCatalogProviding {
+    private let tools: [AgentToolManifest]
+
+    init(tools: [AgentToolManifest]) {
+        self.tools = tools
+    }
+
+    func loadEnabledTools() -> [AgentToolManifest] {
+        tools
+    }
+}
+
+@MainActor
+final class FakeAgentToolRouter: AgentToolRouting {
+    private(set) var requests: [AgentRouteRequest] = []
+    private let toolID: String
+
+    init(toolID: String) {
+        self.toolID = toolID
+    }
+
+    func route(
+        request: AgentRouteRequest,
+        configuration: TextGenerationProviderConfiguration,
+        apiKey _: String
+    ) async throws -> AgentRouteOutcome {
+        requests.append(request)
+        return AgentRouteOutcome(
+            traceID: request.traceID,
+            toolID: toolID,
+            providerName: configuration.providerName,
+            modelName: configuration.modelName,
+            rawOutput: "{\"tool_id\":\"\(toolID)\"}",
+            latencyMilliseconds: 1
+        )
+    }
+}
+
+@MainActor
+final class FakeAgentMusicExecutor: AgentMusicControlling {
+    private(set) var requests: [AgentMusicExecutionRequest] = []
+    private let outcome: AgentMusicExecutionOutcome
+
+    init(
+        outcome: AgentMusicExecutionOutcome = AgentMusicExecutionOutcome(
+            status: .success,
+            message: "已执行音乐。",
+            outputText: "已执行音乐。",
+            evidenceSummary: "apple.music.control|fake=true"
+        )
+    ) {
+        self.outcome = outcome
+    }
+
+    func execute(_ request: AgentMusicExecutionRequest) async -> AgentMusicExecutionOutcome {
+        requests.append(request)
+        return outcome
     }
 }

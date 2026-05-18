@@ -41,10 +41,21 @@ final class SessionStore: ObservableObject {
         startSession(lane: .agentMusic)
     }
 
-    func markAgentExecuting() {
+    func markAgentRouting(
+        providerName: String,
+        modelName: String
+    ) {
         transition(
             to: .textProcessing,
-            statusMessage: "Agent 正在执行音乐命令。",
+            statusMessage: "Agent 正在用 \(providerName) · \(modelName) 判断要使用哪个功能。",
+            hudProgressHint: SessionHUDProgressHint.textTransform
+        )
+    }
+
+    func markAgentExecuting(toolName: String = "音乐控制") {
+        transition(
+            to: .textProcessing,
+            statusMessage: "Agent 正在执行\(toolName)。",
             hudProgressHint: SessionHUDProgressHint.textTransform
         )
     }

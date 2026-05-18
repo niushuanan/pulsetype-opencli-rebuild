@@ -33,6 +33,30 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 10:24 - Agent 接入 LLM Router，只让路由决定 tool_id
+
+- 本次任务：把 Agent 从“ASR 后直接执行音乐”改成“ASR 后先走 LLM Router，再按 `tool_id` 分发到工具执行器”，前端页面保持不变。
+- 改了哪些文件：
+  - `Sources/Core/Interaction/InteractionCoordinatorTypes.swift`
+  - `Sources/Core/Interaction/InteractionCoordinator.swift`
+  - `Sources/Core/Session/SessionStore.swift`
+  - `Sources/Core/Storage/LocalStore.swift`
+  - `Sources/App/AppModel.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 新增 `AgentToolManifest`、`AgentToolCatalogStore`、`AgentRouteRequest`、`AgentRouteOutcome`、`LLMAgentToolRouter`。
+  - `AgentToolCatalogStore` 会在 `Application Support/PulseType/AgentTools/apple.music.control/manifest.json` 准备内置音乐工具清单；当前 Agent 页的“音乐控制”开关只控制该工具是否进入 Router 候选列表。
+  - `LLMAgentToolRouter` 使用文字处理/Agent 执行模型发起一次路由请求，只要求模型返回 `{"tool_id":"..."}`，不让 Router 生成参数、代码或执行步骤。
+  - `InteractionCoordinator` 的 Agent 链路改为：ASR 原文 -> 加载已开启工具 -> LLM Router 选 `tool_id` -> 音乐 executor 继续处理原始命令 -> 写入 Agent 历史和证据。
+  - `SessionStore` 增加 Agent 路由中的 HUD 文案，历史证据中同时记录 `agent.route` 和 `apple.music.control` 两段证据。
+  - 新增测试覆盖 Router JSON 解析、Agent 路由后执行音乐、无可用工具时不调用 Router 并写失败历史。
+- 为什么这样改：
+  - 用户后续会加入浏览器、飞书、时钟等更多工具；Router 只负责分流，具体命令解析和执行仍留在各工具 executor 内，职责更清楚。
+  - 前端的功能开关不应该变成“是否启用路由”，而应该表示“这个工具是否参与路由选择”。
+- 影响了哪些模块：
+  - Agent 底层分发链路、Agent 历史证据、运行时本地目录结构、测试覆盖。
+
 ### 2026-05-18 09:57 - Agent 播放路径提速（去掉队列重建/扫描）并清理证据重复字段
 
 - 本次任务：针对“播放命令明显变慢”的反馈做提速优化，保持资料库顺序语义不变。

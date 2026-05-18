@@ -142,7 +142,8 @@ final class AppModel: ObservableObject {
             contextDetector: contextDetector,
             localHistoryStore: localHistoryStore,
             speechPipelineLogger: speechPipelineLogger,
-            toastPresenter: toastPresenter
+            toastPresenter: toastPresenter,
+            agentToolCatalog: AgentToolCatalogStore(toolsDirectory: store.agentToolsDirectory)
         )
         return AppModel(
             controlCenterState: controlCenterState,
