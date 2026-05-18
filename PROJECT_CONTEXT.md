@@ -33,6 +33,26 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 11:23 - Calendar 改为严格一次性执行，不追问缺失信息
+
+- 本次任务：修正 Calendar 工具里“缺时间/标题可能失败或追问”的设计，改成一次性执行路径。
+- 改了哪些文件：
+  - `Sources/Core/AgentCalendar/AgentCalendarExecutor.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 移除 Calendar 参数协议里的 `needs_confirmation` / `confirmation_question` 字段，工具不再支持“追问确认”分支。
+  - Calendar prompt 改为强制模型一次性推理完整参数：缺标题就根据语义生成短标题，缺日期或时间就结合当前参考时间推理一个未来时间。
+  - Swift 执行层不再因为标题为空直接失败；标题为空时用原始用户命令兜底。
+  - Swift 执行层不再因为模型多返回确认字段而停止；即使模型错误返回确认字段，也会被忽略，继续走创建日程路径。
+  - 增加稀疏模型输出兜底：如果模型仍然漏掉开始时间，使用参考时间后的下一个整点作为最后兜底，避免变成追问或缺字段失败。
+  - 新增测试覆盖：模型返回确认字段也保持一次性路径；模型漏掉标题/开始时间也不会追问。
+- 为什么这样改：
+  - 用户要的是长按 Agent 后一次说完、一次执行，不要在 Calendar 这种高频动作里出现二次对话。
+  - 模型应该负责理解自然语言中的隐含时间和标题，工具层只做安全兜底与执行。
+- 影响了哪些模块：
+  - Calendar 参数提取 prompt、Calendar 执行器失败分支、Agent 日程创建测试。
+
 ### 2026-05-18 11:20 - Agent 新增 Calendar 日程工具，只创建日历事件
 
 - 本次任务：在现有 Agent Router 框架里新增 `apple.calendar.create_event` 工具，只做 Calendar 日程，不做 Reminder。

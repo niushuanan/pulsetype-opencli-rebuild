@@ -277,9 +277,7 @@ final class PulseTypeCoreTests: XCTestCase {
                   "calendar": null,
                   "location": "",
                   "notes": "",
-                  "alarm_minutes_before": 10,
-                  "needs_confirmation": false,
-                  "confirmation_question": null
+                  "alarm_minutes_before": 10
                 }
                 """
             )
@@ -299,7 +297,72 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(result.startAtISO8601, "2026-05-23T09:00:00+08:00")
         XCTAssertEqual(result.endAtISO8601, "2026-05-23T10:00:00+08:00")
         XCTAssertEqual(result.alarmMinutesBefore, 10)
-        XCTAssertFalse(result.needsConfirmation)
+    }
+
+    func testCalendarParameterExtractorIgnoresConfirmationFlagAndKeepsOneShotPath() async throws {
+        let extractor = LLMAgentCalendarParameterExtractor(
+            generationProvider: FakeTextGenerationProvider(
+                output: """
+                {
+                  "title": "会议",
+                  "start_at": "2026-05-23T09:00:00+08:00",
+                  "end_at": "2026-05-23T10:00:00+08:00",
+                  "calendar": null,
+                  "location": "",
+                  "notes": "",
+                  "alarm_minutes_before": null,
+                  "needs_confirmation": true,
+                  "confirmation_question": "你想定几点？"
+                }
+                """
+            )
+        )
+
+        let result = try await extractor.extract(
+            request: AgentCalendarParameterExtractionRequest(
+                command: "有个会，帮我定一下",
+                referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
+                timeZone: TimeZone(identifier: "Asia/Shanghai")!
+            ),
+            configuration: makeTextGenerationConfiguration(),
+            apiKey: "text-key-123456"
+        )
+
+        XCTAssertEqual(result.title, "会议")
+        XCTAssertEqual(result.startAtISO8601, "2026-05-23T09:00:00+08:00")
+    }
+
+    func testCalendarParameterExtractorBackfillsSparseModelOutputWithoutAsking() async throws {
+        let extractor = LLMAgentCalendarParameterExtractor(
+            generationProvider: FakeTextGenerationProvider(
+                output: """
+                {
+                  "title": "",
+                  "start_at": "",
+                  "end_at": null,
+                  "calendar": null,
+                  "location": "",
+                  "notes": "",
+                  "alarm_minutes_before": null
+                }
+                """
+            )
+        )
+
+        let result = try await extractor.extract(
+            request: AgentCalendarParameterExtractionRequest(
+                command: "九点有个会",
+                referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
+                timeZone: TimeZone(identifier: "Asia/Shanghai")!
+            ),
+            configuration: makeTextGenerationConfiguration(),
+            apiKey: "text-key-123456"
+        )
+
+        XCTAssertEqual(result.title, "九点有个会")
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        XCTAssertNotNil(formatter.date(from: result.startAtISO8601))
     }
 
     func testCalendarExecutorCreatesEventAfterModelParameterExtraction() async throws {
@@ -321,9 +384,7 @@ final class PulseTypeCoreTests: XCTestCase {
                       "calendar": "工作",
                       "location": "会议室 A",
                       "notes": "讨论排期",
-                      "alarm_minutes_before": 10,
-                      "needs_confirmation": false,
-                      "confirmation_question": null
+                      "alarm_minutes_before": 10
                     }
                     """
                 )

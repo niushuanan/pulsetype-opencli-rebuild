@@ -14,19 +14,14 @@ struct AgentCalendarParameters: Equatable {
     let location: String
     let notes: String
     let alarmMinutesBefore: Int?
-    let needsConfirmation: Bool
-    let confirmationQuestion: String?
 }
 
 enum AgentCalendarError: LocalizedError, Equatable {
     case emptyCommand
     case modelReturnedInvalidJSON(String)
-    case missingTitle
-    case missingStartTime
     case invalidStartTime(String)
     case invalidEndTime(String)
     case endBeforeStart
-    case needsConfirmation(String)
     case scriptFailed(String)
     case verificationFailed(String)
 
@@ -37,20 +32,12 @@ enum AgentCalendarError: LocalizedError, Equatable {
         case let .modelReturnedInvalidJSON(output):
             let normalized = output.trimmingCharacters(in: .whitespacesAndNewlines)
             return normalized.isEmpty ? "日历工具没有返回可用参数。" : "日历工具返回格式不正确：\(normalized)"
-        case .missingTitle:
-            return "没有识别到日程标题。"
-        case .missingStartTime:
-            return "没有识别到日程开始时间。"
         case let .invalidStartTime(value):
             return "日程开始时间格式不正确：\(value)。"
         case let .invalidEndTime(value):
             return "日程结束时间格式不正确：\(value)。"
         case .endBeforeStart:
             return "日程结束时间不能早于开始时间。"
-        case let .needsConfirmation(question):
-            return question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "创建日程前还需要补充时间信息。"
-                : question
         case let .scriptFailed(reason):
             return "Calendar 执行失败：\(reason)"
         case let .verificationFailed(reason):
@@ -76,8 +63,6 @@ struct LLMAgentCalendarParameterExtractor: AgentCalendarParameterExtracting {
         let location: String?
         let notes: String?
         let alarmMinutesBefore: Int?
-        let needsConfirmation: Bool?
-        let confirmationQuestion: String?
 
         enum CodingKeys: String, CodingKey {
             case title
@@ -87,8 +72,6 @@ struct LLMAgentCalendarParameterExtractor: AgentCalendarParameterExtracting {
             case location
             case notes
             case alarmMinutesBefore = "alarm_minutes_before"
-            case needsConfirmation = "needs_confirmation"
-            case confirmationQuestion = "confirmation_question"
         }
     }
 
@@ -114,20 +97,8 @@ struct LLMAgentCalendarParameterExtractor: AgentCalendarParameterExtracting {
             apiKey: apiKey
         )
         let payload = try parsePayload(from: generation.outputText)
-        let needsConfirmation = payload.needsConfirmation ?? false
-        if needsConfirmation {
-            throw AgentCalendarError.needsConfirmation(payload.confirmationQuestion ?? "")
-        }
-
-        let title = trimmed(payload.title)
-        guard !title.isEmpty else {
-            throw AgentCalendarError.missingTitle
-        }
-
-        let startAt = trimmed(payload.startAt)
-        guard !startAt.isEmpty else {
-            throw AgentCalendarError.missingStartTime
-        }
+        let title = oneShotTitle(from: payload.title, command: normalizedCommand)
+        let startAt = oneShotStartAt(from: payload.startAt, request: request)
 
         return AgentCalendarParameters(
             title: title,
@@ -136,9 +107,7 @@ struct LLMAgentCalendarParameterExtractor: AgentCalendarParameterExtracting {
             calendarName: normalizedOptional(payload.calendar),
             location: trimmed(payload.location),
             notes: trimmed(payload.notes),
-            alarmMinutesBefore: payload.alarmMinutesBefore,
-            needsConfirmation: false,
-            confirmationQuestion: normalizedOptional(payload.confirmationQuestion)
+            alarmMinutesBefore: payload.alarmMinutesBefore
         )
     }
 
@@ -153,12 +122,14 @@ struct LLMAgentCalendarParameterExtractor: AgentCalendarParameterExtracting {
         严格规则：
         1. 只输出 JSON，不要输出解释、Markdown、代码块或 AppleScript。
         2. 这是 Calendar 日程，不是提醒事项；默认要创建日历事件。
-        3. 输出字段必须包含 title、start_at、end_at、calendar、location、notes、alarm_minutes_before、needs_confirmation、confirmation_question。
+        3. 输出字段必须包含 title、start_at、end_at、calendar、location、notes、alarm_minutes_before。
         4. start_at 和 end_at 必须是 ISO-8601，例如 2026-05-23T09:00:00+08:00。
         5. 如果用户没有说结束时间，end_at 默认等于 start_at 后 1 小时。
         6. 如果用户只说“九点”这类时间，若今天该时间未过，默认今天；若已过，默认明天。
-        7. 如果无法判断具体日期或时间，设置 needs_confirmation=true，并给出一句简短 confirmation_question。
-        8. 不要编造地点、备注和日历名；没说就返回空字符串或 null。
+        7. 这是一次性执行路径，不能追问、不能要求确认、不能输出 needs_confirmation 或 confirmation_question。
+        8. 如果用户没说标题，你必须根据语义推理一个短标题，例如“会议”“看医生”“项目讨论”；不能留空。
+        9. 如果用户没说日期或时间，你必须结合当前参考时间推理一个最合理的未来时间；不能留空。
+        10. 不要编造地点、备注和日历名；没说就返回空字符串或 null。
         """
 
         let userPrompt = """
@@ -206,6 +177,33 @@ struct LLMAgentCalendarParameterExtractor: AgentCalendarParameterExtracting {
     private func normalizedOptional(_ value: String?) -> String? {
         let normalized = trimmed(value)
         return normalized.isEmpty ? nil : normalized
+    }
+
+    private func oneShotTitle(from value: String?, command: String) -> String {
+        let normalized = trimmed(value)
+        return normalized.isEmpty ? command : normalized
+    }
+
+    private func oneShotStartAt(
+        from value: String?,
+        request: AgentCalendarParameterExtractionRequest
+    ) -> String {
+        let normalized = trimmed(value)
+        guard normalized.isEmpty else {
+            return normalized
+        }
+        let fallback = Self.nextFullHour(after: request.referenceDate, timeZone: request.timeZone)
+        return AgentCalendarDateFormatter.string(from: fallback, timeZone: request.timeZone)
+    }
+
+    private static func nextFullHour(after date: Date, timeZone: TimeZone) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        var components = calendar.dateComponents([.year, .month, .day, .hour], from: date)
+        components.hour = (components.hour ?? 0) + 1
+        components.minute = 0
+        components.second = 0
+        return calendar.date(from: components) ?? date.addingTimeInterval(60 * 60)
     }
 }
 
@@ -349,9 +347,6 @@ struct AgentCalendarEventSpec: Equatable {
 
     init(parameters: AgentCalendarParameters, timeZone: TimeZone) throws {
         let title = parameters.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else {
-            throw AgentCalendarError.missingTitle
-        }
         guard let startAt = AgentCalendarDateFormatter.iso8601.date(from: parameters.startAtISO8601) else {
             throw AgentCalendarError.invalidStartTime(parameters.startAtISO8601)
         }
@@ -368,7 +363,7 @@ struct AgentCalendarEventSpec: Equatable {
             throw AgentCalendarError.endBeforeStart
         }
 
-        self.title = title
+        self.title = title.isEmpty ? "日程" : title
         self.startAt = startAt
         self.endAt = endAt
         self.calendarName = Self.normalizedOptional(parameters.calendarName)
@@ -512,6 +507,13 @@ private enum AgentCalendarDateFormatter {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
+
+    static func string(from date: Date, timeZone: TimeZone) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        formatter.timeZone = timeZone
+        return formatter.string(from: date)
+    }
 }
 
 private func runCalendarAppleScript(
