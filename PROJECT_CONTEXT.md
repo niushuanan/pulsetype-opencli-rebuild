@@ -33,6 +33,23 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 15:10 - Clock 时间控件按 CFDate 写入，真实 AX 验证通过
+
+- 本次任务：修复 `clock` 在标题正确但时间落成当前时刻/默认值的问题，并做真实 Clock UI 验证。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 定位到 Clock 新建闹钟弹窗里的 `AXDateTimeArea` 不是字符串控件，`kAXValueAttribute` 的真实类型是 `CFDate`，不能再用 `HH:mm` 字符串直接写入。
+  - `setTime` 改为先读取控件当前 `Date`，保留其年月日，只替换小时和分钟后再以 `CFDate` 回写。
+  - 写后核对改成兼容 24 小时和 12 小时显示形式，避免系统把 `18:10` 显示成 `6:10 PM` 时被误判失败。
+  - 保留键盘输入兜底，但主路径已经切到正确的 `CFDate` 写入。
+  - 用真实 AX 脚本创建了 `18:12 / 最终验证1510` 闹钟，并用 `computer-use` 看到 Clock 卡片确实显示正确时间和标题，随后已删除测试闹钟。
+- 为什么这样改：
+  - 之前把时间控件当字符串写，根因上就错了；这会导致标题能成功、时间却停在默认值或当前值。
+- 影响了哪些模块：
+  - Agent clock 的 Clock UI 自动化写入、成功校验、故障定位证据链。
+
 ### 2026-05-18 14:45 - clock 时间提取改为严格单次模型，不再二次补全
 
 - 本次任务：按用户要求把 `fire_at` 恢复为一次模型调用内完成，不允许本地解析，也不允许二次模型补全。

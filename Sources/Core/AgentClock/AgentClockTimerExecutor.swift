@@ -393,27 +393,42 @@ private struct ClockAccessibilityAlarmCreator {
     }
 
     private func setTime(_ timeText: String, in sheet: AXUIElement) -> Bool {
-        guard let dateTimeArea = findFirst(in: sheet, matching: { role(of: $0) == "AXDateTimeArea" }) else {
-            return false
+        let candidates = allElements(in: sheet).filter { element in
+            role(of: element) == "AXDateTimeArea"
         }
-        let status = AXUIElementSetAttributeValue(dateTimeArea, kAXValueAttribute as CFString, timeText as CFString)
-        guard status == .success else {
-            return false
+        for candidate in candidates {
+            if let timeValue = clockDateValue(for: candidate, timeText: timeText),
+               setValueAndVerify(timeValue, expectedText: timeText, on: candidate) {
+                return true
+            }
+            if clickCenter(of: candidate), clearFocusedText(usingDelete: false) {
+                typeText(timeText)
+                Thread.sleep(forTimeInterval: 0.15)
+                if textSnapshot(for: candidate).contains(timeText) {
+                    return true
+                }
+            }
         }
-        Thread.sleep(forTimeInterval: 0.15)
-        return true
+        return false
     }
 
     private func setLabel(_ title: String, in sheet: AXUIElement) -> Bool {
-        guard let field = findFirst(in: sheet, matching: { role(of: $0) == kAXTextFieldRole as String }) else {
-            return false
+        let candidates = allElements(in: sheet).filter { element in
+            role(of: element) == kAXTextFieldRole as String
         }
-        let status = AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, title as CFString)
-        guard status == .success else {
-            return false
+        for candidate in candidates {
+            if setValueAndVerify(title as CFTypeRef, expectedText: title, on: candidate) {
+                return true
+            }
+            if clickCenter(of: candidate), clearFocusedText(usingDelete: true) {
+                typeText(title)
+                Thread.sleep(forTimeInterval: 0.1)
+                if textSnapshot(for: candidate).contains(title) {
+                    return true
+                }
+            }
         }
-        Thread.sleep(forTimeInterval: 0.1)
-        return true
+        return false
     }
 
     private func pressSave(in sheet: AXUIElement) -> Bool {
@@ -538,9 +553,10 @@ private struct ClockAccessibilityAlarmCreator {
         return value as? String
     }
 
-    private func clickCenter(of element: AXUIElement) {
+    @discardableResult
+    private func clickCenter(of element: AXUIElement) -> Bool {
         guard let frame = frame(of: element) else {
-            return
+            return false
         }
         let point = CGPoint(x: frame.midX, y: frame.midY)
         let source = CGEventSource(stateID: .combinedSessionState)
@@ -549,6 +565,7 @@ private struct ClockAccessibilityAlarmCreator {
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
         Thread.sleep(forTimeInterval: 0.15)
+        return true
     }
 
     private func frame(of element: AXUIElement) -> CGRect? {
@@ -571,6 +588,100 @@ private struct ClockAccessibilityAlarmCreator {
             return nil
         }
         return CGRect(origin: point, size: size)
+    }
+
+    private func setValueAndVerify(_ value: CFTypeRef, expectedText: String, on element: AXUIElement) -> Bool {
+        let status = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value)
+        guard status == .success else {
+            return false
+        }
+        Thread.sleep(forTimeInterval: 0.15)
+        return textSnapshot(for: element).containsAny(clockDisplayVariants(for: expectedText))
+    }
+
+    private func clearFocusedText(usingDelete: Bool) -> Bool {
+        pressKeyCG(55, down: true)
+        pressKeyCG(0, down: true)
+        pressKeyCG(0, down: false)
+        pressKeyCG(55, down: false)
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let deleteKey: CGKeyCode = usingDelete ? 51 : 117
+        pressKeyCG(deleteKey, down: true)
+        pressKeyCG(deleteKey, down: false)
+        Thread.sleep(forTimeInterval: 0.05)
+        return true
+    }
+
+    private func typeText(_ text: String) {
+        for scalar in text.unicodeScalars {
+            guard let source = CGEventSource(stateID: .combinedSessionState) else {
+                continue
+            }
+            let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
+            let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
+            down?.keyboardSetUnicodeString(stringLength: 1, unicodeString: [UniChar(scalar.value)])
+            up?.keyboardSetUnicodeString(stringLength: 1, unicodeString: [UniChar(scalar.value)])
+            down?.post(tap: .cghidEventTap)
+            up?.post(tap: .cghidEventTap)
+        }
+    }
+
+    private func pressKeyCG(_ keyCode: CGKeyCode, down: Bool) {
+        guard let source = CGEventSource(stateID: .combinedSessionState),
+              let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down) else {
+            return
+        }
+        event.post(tap: .cghidEventTap)
+    }
+
+    private func clockDateValue(for element: AXUIElement, timeText: String) -> CFTypeRef? {
+        let parts = timeText.split(separator: ":")
+        guard parts.count == 2,
+              let hour = Int(parts[0]),
+              let minute = Int(parts[1]) else {
+            return nil
+        }
+
+        var currentValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &currentValue) == .success,
+              let currentDate = currentValue as? Date else {
+            return nil
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        var components = calendar.dateComponents([.year, .month, .day], from: currentDate)
+        components.hour = hour
+        components.minute = minute
+        components.second = 0
+        guard let targetDate = calendar.date(from: components) else {
+            return nil
+        }
+        return targetDate as CFDate
+    }
+
+    private func clockDisplayVariants(for timeText: String) -> [String] {
+        let parts = timeText.split(separator: ":")
+        guard parts.count == 2,
+              let hour24 = Int(parts[0]),
+              let minute = Int(parts[1]) else {
+            return [timeText]
+        }
+
+        let minuteText = String(format: "%02d", minute)
+        let hour12Raw = hour24 % 12
+        let hour12 = hour12Raw == 0 ? 12 : hour12Raw
+        let periodCN = hour24 < 12 ? "上午" : "下午"
+        let periodEN = hour24 < 12 ? "AM" : "PM"
+
+        return [
+            timeText,
+            "\(periodCN)\(hour12):\(minuteText)",
+            "\(periodCN) \(hour12):\(minuteText)",
+            "\(hour12):\(minuteText) \(periodEN)",
+            "\(hour12):\(minuteText)\(periodEN)"
+        ]
     }
 }
 
