@@ -376,20 +376,42 @@ private struct ClockAccessibilityAlarmCreator {
     }
 
     private func openAlarmEditor(in app: AXUIElement) -> Bool {
-        guard let button = findFirst(in: app, matching: { element in
+        let deadline = Date().addingTimeInterval(4)
+        while Date() < deadline {
+            pressAlarmTab(in: app)
+            if let button = findAddAlarmButton(in: app) {
+                _ = AXUIElementPerformAction(button, kAXPressAction as CFString)
+                Thread.sleep(forTimeInterval: 0.2)
+                if findFirst(in: app, matching: { role(of: $0) == kAXSheetRole as String }) != nil {
+                    return true
+                }
+                clickCenter(of: button)
+                if waitForElement(in: app, matching: { role(of: $0) == kAXSheetRole as String }) != nil {
+                    return true
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.15)
+        }
+        return false
+    }
+
+    private func findAddAlarmButton(in app: AXUIElement) -> AXUIElement? {
+        findFirst(in: app, matching: { element in
             let roleName = role(of: element)
-            return (roleName == kAXMenuButtonRole as String || roleName == kAXButtonRole as String)
-                && textSnapshot(for: element).containsAny(["添加闹钟", "Add Alarm"])
-        }) else {
-            return false
-        }
-        _ = AXUIElementPerformAction(button, kAXPressAction as CFString)
-        Thread.sleep(forTimeInterval: 0.2)
-        if findFirst(in: app, matching: { role(of: $0) == kAXSheetRole as String }) != nil {
-            return true
-        }
-        clickCenter(of: button)
-        return waitForElement(in: app, matching: { role(of: $0) == kAXSheetRole as String }) != nil
+            guard roleName == kAXMenuButtonRole as String || roleName == kAXButtonRole as String else {
+                return false
+            }
+
+            let identifier = stringAttribute(kAXIdentifierAttribute as String, on: element) ?? ""
+            let title = stringAttribute(kAXTitleAttribute as String, on: element) ?? ""
+            let description = stringAttribute(kAXDescriptionAttribute as String, on: element) ?? ""
+            let snapshot = textSnapshot(for: element)
+
+            return identifier.localizedCaseInsensitiveContains("AddAlarm")
+                || title.containsAny(["添加闹钟", "Add Alarm"])
+                || description.containsAny(["添加闹钟", "Add Alarm"])
+                || snapshot.containsAny(["添加闹钟", "Add Alarm"])
+        })
     }
 
     private func setTime(_ timeText: String, in sheet: AXUIElement) -> Bool {

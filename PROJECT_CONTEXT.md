@@ -33,6 +33,21 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 15:13 - Clock 添加闹钟按钮改为轮询查找，降低首屏未挂载导致的失败
+
+- 本次任务：修复 `clock_error|detail=add_alarm_button_not_found`。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - `openAlarmEditor` 不再只做一次同步查找，而是在 4 秒窗口内持续轮询。
+  - 每轮都会重新确保停留在“闹钟”页，再按 `identifier/title/description/textSnapshot` 四条线并行查找“添加闹钟 / Add Alarm”按钮。
+  - 找到按钮后仍保留 `AXPress` 和坐标点击双通道，继续等待 `sheet` 打开。
+- 为什么这样改：
+  - 用户刚刚给出的真实失败说明前一版虽然时间写入问题已修，但 Clock 首屏 toolbar 有时还没完全挂载，导致过早判定“按钮不存在”。
+- 影响了哪些模块：
+  - Agent clock 的前置 UI 定位稳定性、Clock 首次打开时的成功率。
+
 ### 2026-05-18 15:10 - Clock 时间控件按 CFDate 写入，真实 AX 验证通过
 
 - 本次任务：修复 `clock` 在标题正确但时间落成当前时刻/默认值的问题，并做真实 Clock UI 验证。
