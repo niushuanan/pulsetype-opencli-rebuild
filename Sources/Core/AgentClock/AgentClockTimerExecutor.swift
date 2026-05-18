@@ -81,7 +81,7 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         let payload = try parsePayload(from: generation.outputText)
 
         let action = oneShotAction(from: payload.action)
-        let title = oneShotTitle(from: payload.title)
+        let title = oneShotTitle(from: payload.title, command: normalizedCommand)
         let fireAt = oneShotFireAt(from: payload.fireAt, request: request)
         let notes = oneShotNotes(from: payload.notes, title: title, command: normalizedCommand)
 
@@ -102,9 +102,10 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         3. fire_at 必须是 ISO-8601，例如 2026-05-23T09:00:00+08:00。
         4. 这是一次性路径，不追问、不确认。
         5. title 必须是你概括后的短标题，禁止留空、禁止照抄整句口令。
-        6. 如果缺少具体日期或时间，你要结合当前参考时间推理一个未来时间。
-        7. notes 要补成一句简短备注，说明提醒目的。
-        8. action 只能是 create_one_shot_alarm。
+        6. title 禁止使用“闹钟”“提醒”“闹钟提醒”等空泛词作为完整标题。
+        7. 如果缺少具体日期或时间，你要结合当前参考时间推理一个未来时间。
+        8. notes 要补成一句简短备注，说明提醒目的。
+        9. action 只能是 create_one_shot_alarm。
         """
 
         let userPrompt = """
@@ -149,9 +150,35 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    private func oneShotTitle(from value: String?) -> String {
+    private func oneShotTitle(from value: String?, command: String) -> String {
         let normalized = trimmed(value)
-        return normalized.isEmpty ? "闹钟提醒" : normalized
+        if normalized.isEmpty || isGenericTitle(normalized) {
+            let heuristic = heuristicTitle(from: command)
+            return heuristic.isEmpty ? "闹钟提醒" : heuristic
+        }
+        return normalized
+    }
+
+    private func isGenericTitle(_ value: String) -> Bool {
+        let normalized = value.replacingOccurrences(of: " ", with: "").lowercased()
+        return ["闹钟", "提醒", "闹钟提醒", "alarm", "reminder"].contains(normalized)
+    }
+
+    private func heuristicTitle(from command: String) -> String {
+        let text = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "" }
+        let dropTokens = ["帮我定一个", "帮我定", "设置一个", "设置", "定一个", "定", "闹钟", "提醒我", "提醒", "今天", "下午", "上午", "晚上", "中午", "明天", "后天"]
+        var candidate = text
+        for token in dropTokens {
+            candidate = candidate.replacingOccurrences(of: token, with: "")
+        }
+        candidate = candidate.replacingOccurrences(of: "。", with: "")
+            .replacingOccurrences(of: "，", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if candidate.count > 12 {
+            candidate = String(candidate.prefix(12))
+        }
+        return candidate
     }
 
     private func oneShotAction(from value: String?) -> String {
@@ -269,33 +296,13 @@ struct AppleScriptAgentClockRunner: AgentClockScriptRunning {
             "set targetLabel to item 1 of argv",
             "set timeText to item 2 of argv",
             "set alarmID to item 3 of argv",
-            "tell application \"Clock\" to activate",
-            "delay 0.35",
+            "tell application \"Clock\" to launch",
+            "delay 0.2",
             "tell application \"System Events\"",
             "if UI elements enabled is false then return \"clock_error|detail=accessibility_denied\"",
             "tell process \"Clock\"",
             "set frontmost to true",
-            "set beforeCount to 0",
-            "set beforeIDs to \"\"",
-            "try",
-            "set allButtonsBefore to every button of entire contents of window 1",
-            "repeat with b in allButtonsBefore",
-            "set bIdentifier to \"\"",
-            "set bDescription to \"\"",
-            "try",
-            "set bIdentifier to (identifier of b) as string",
-            "end try",
-            "try",
-            "set bDescription to (description of b) as string",
-            "end try",
-            "if bIdentifier starts with \"Alarm-\" then",
-            "set beforeCount to beforeCount + 1",
-            "set beforeIDs to beforeIDs & \"|\" & bIdentifier",
-            "else if bDescription contains \", 打开\" or bDescription contains \", Open\" then",
-            "set beforeCount to beforeCount + 1",
-            "end if",
-            "end repeat",
-            "end try",
+            "set beforeIDs to my collectAlarmIDs(window 1)",
             "set switchedToAlarmTab to false",
             "try",
             "click menu item \"闹钟\" of menu 1 of menu bar item \"显示\" of menu bar 1",
@@ -390,12 +397,72 @@ struct AppleScriptAgentClockRunner: AgentClockScriptRunning {
             "end try",
             "end if",
             "if savedAlarm is false then return \"clock_error|detail=save_button_not_found\"",
-            "delay 0.35",
-            "set afterCount to 0",
+            "set verificationPasses to 0",
+            "set afterIDs to \"\"",
             "set newAlarmIdentifier to \"\"",
+            "repeat while verificationPasses < 12 and newAlarmIdentifier is \"\"",
+            "delay 0.15",
+            "set afterIDs to my collectAlarmIDs(window 1)",
+            "set newAlarmIdentifier to my findNewAlarmID(beforeIDs, afterIDs)",
+            "set verificationPasses to verificationPasses + 1",
+            "end repeat",
+            "if newAlarmIdentifier is not \"\" then return \"alarm_created|clock_app=true|once=true|time=\" & timeText & \"|alarm_id=\" & newAlarmIdentifier & \"|before=\" & my countAlarmIDs(beforeIDs) & \"|after=\" & my countAlarmIDs(afterIDs)",
+            "if my hasMatchingAlarm(window 1, timeText, targetLabel) then return \"alarm_created|clock_app=true|once=true|time=\" & timeText & \"|alarm_id=\" & alarmID & \"|before=\" & my countAlarmIDs(beforeIDs) & \"|after=\" & my countAlarmIDs(afterIDs)",
+            "return \"clock_error|detail=verification_failed|before=\" & my countAlarmIDs(beforeIDs) & \"|after=\" & my countAlarmIDs(afterIDs)",
+            "end tell",
+            "end tell",
+            "end run",
+            "",
+            "on collectAlarmIDs(winRef)",
+            "set collected to {}",
             "try",
-            "set allButtonsAfter to every button of entire contents of window 1",
-            "repeat with b in allButtonsAfter",
+            "set allButtons to every button of entire contents of winRef",
+            "repeat with b in allButtons",
+            "set bIdentifier to \"\"",
+            "try",
+            "set bIdentifier to (identifier of b) as string",
+            "end try",
+            "if bIdentifier starts with \"Alarm-\" then set end of collected to bIdentifier",
+            "end repeat",
+            "end try",
+            "set AppleScript's text item delimiters to \"|\"",
+            "set joined to collected as string",
+            "set AppleScript's text item delimiters to \"\"",
+            "return joined",
+            "end collectAlarmIDs",
+            "",
+            "on findNewAlarmID(beforeIDs, afterIDs)",
+            "if afterIDs is \"\" then return \"\"",
+            "set oldTIDs to AppleScript's text item delimiters",
+            "set AppleScript's text item delimiters to \"|\"",
+            "set afterList to text items of afterIDs",
+            "set AppleScript's text item delimiters to oldTIDs",
+            "repeat with itemID in afterList",
+            "set oneID to itemID as string",
+            "if oneID is not \"\" then",
+            "if beforeIDs does not contain oneID then return oneID",
+            "end if",
+            "end repeat",
+            "return \"\"",
+            "end findNewAlarmID",
+            "",
+            "on countAlarmIDs(idText)",
+            "if idText is \"\" then return 0",
+            "set oldTIDs to AppleScript's text item delimiters",
+            "set AppleScript's text item delimiters to \"|\"",
+            "set idList to text items of idText",
+            "set AppleScript's text item delimiters to oldTIDs",
+            "set n to 0",
+            "repeat with oneID in idList",
+            "if (oneID as string) is not \"\" then set n to n + 1",
+            "end repeat",
+            "return n",
+            "end countAlarmIDs",
+            "",
+            "on hasMatchingAlarm(winRef, timeText, targetLabel)",
+            "try",
+            "set allButtons to every button of entire contents of winRef",
+            "repeat with b in allButtons",
             "set bIdentifier to \"\"",
             "set bDescription to \"\"",
             "try",
@@ -405,19 +472,15 @@ struct AppleScriptAgentClockRunner: AgentClockScriptRunning {
             "set bDescription to (description of b) as string",
             "end try",
             "if bIdentifier starts with \"Alarm-\" then",
-            "set afterCount to afterCount + 1",
-            "if beforeIDs does not contain (\"|\" & bIdentifier) and newAlarmIdentifier is \"\" then set newAlarmIdentifier to bIdentifier",
-            "else if bDescription contains \", 打开\" or bDescription contains \", Open\" then",
-            "set afterCount to afterCount + 1",
+            "if bDescription contains timeText then",
+            "if targetLabel is \"\" then return true",
+            "if bDescription contains targetLabel then return true",
+            "end if",
             "end if",
             "end repeat",
             "end try",
-            "if newAlarmIdentifier is not \"\" then return \"alarm_created|clock_app=true|once=true|time=\" & timeText & \"|alarm_id=\" & newAlarmIdentifier & \"|before=\" & beforeCount & \"|after=\" & afterCount",
-            "if afterCount > beforeCount then return \"alarm_created|clock_app=true|once=true|time=\" & timeText & \"|alarm_id=\" & alarmID & \"|before=\" & beforeCount & \"|after=\" & afterCount",
-            "return \"clock_error|detail=verification_failed|before=\" & beforeCount & \"|after=\" & afterCount",
-            "end tell",
-            "end tell",
-            "end run"
+            "return false",
+            "end hasMatchingAlarm"
         ]
 
         let result = runClockAppleScript(lines: lines, arguments: [spec.title, timeText, identifier])
