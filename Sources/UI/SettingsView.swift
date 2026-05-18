@@ -211,6 +211,7 @@ struct SettingsView: View {
                 Toggle("音乐控制", isOn: $isAgentMusicControlEnabled)
                     .labelsHidden()
                     .toggleStyle(.switch)
+                    .scaleEffect(x: 44.0 / 54.0, y: 18.0 / 24.0, anchor: .trailing)
                     .accessibilityLabel("音乐控制")
             }
             .padding(.vertical, 12)
@@ -231,6 +232,7 @@ struct SettingsView: View {
                 Toggle("日历日程", isOn: $isAgentCalendarCreateEventEnabled)
                     .labelsHidden()
                     .toggleStyle(.switch)
+                    .scaleEffect(x: 44.0 / 54.0, y: 18.0 / 24.0, anchor: .trailing)
                     .accessibilityLabel("日历日程")
             }
             .padding(.vertical, 12)
@@ -251,6 +253,7 @@ struct SettingsView: View {
                 Toggle("闹钟提醒", isOn: $isAgentClockTimerEnabled)
                     .labelsHidden()
                     .toggleStyle(.switch)
+                    .scaleEffect(x: 44.0 / 54.0, y: 18.0 / 24.0, anchor: .trailing)
                     .accessibilityLabel("闹钟提醒")
             }
             .padding(.vertical, 12)
