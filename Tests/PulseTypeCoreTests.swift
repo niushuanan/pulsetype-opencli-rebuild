@@ -481,47 +481,38 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertNotEqual(result.title, "闹钟提醒")
     }
 
-    func testClockParameterExtractorParsesChineseTimeWhenFireAtMissing() async throws {
+    func testClockParameterExtractorRecoversFireAtBySecondModelCallWhenMissing() async throws {
         let extractor = LLMAgentClockParameterExtractor(
             generationProvider: FakeTextGenerationProvider(
-                output: """
-                {
-                  "action": "create_one_shot_alarm",
-                  "title": "帮班主任干活",
-                  "fire_at": "",
-                  "notes": "提醒办事"
-                }
-                """
+                outputs: [
+                    """
+                    {
+                      "action": "create_one_shot_alarm",
+                      "title": "帮班主任干活",
+                      "fire_at": "",
+                      "notes": "提醒办事"
+                    }
+                    """,
+                    """
+                    {
+                      "fire_at": "2026-05-23T17:20:00+08:00"
+                    }
+                    """
+                ]
             )
         )
 
-        let shanghai = TimeZone(identifier: "Asia/Shanghai")!
-        let referenceDate = Date(timeIntervalSince1970: 1_779_029_200)
         let result = try await extractor.extract(
             request: AgentClockParameterExtractionRequest(
                 command: "定一个今天下午五点二十的闹钟",
-                referenceDate: referenceDate,
-                timeZone: shanghai
+                referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
+                timeZone: TimeZone(identifier: "Asia/Shanghai")!
             ),
             configuration: makeTextGenerationConfiguration(),
             apiKey: "text-key-123456"
         )
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let parsedWithFraction = formatter.date(from: result.fireAtISO8601)
-        formatter.formatOptions = [.withInternetDateTime]
-        guard let fireDate = parsedWithFraction ?? formatter.date(from: result.fireAtISO8601) else {
-            XCTFail("fire_at 不是合法 ISO8601: \(result.fireAtISO8601)")
-            return
-        }
-
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = shanghai
-        let fireComponents = calendar.dateComponents([.hour, .minute], from: fireDate)
-        XCTAssertEqual(fireComponents.hour, 17)
-        XCTAssertEqual(fireComponents.minute, 20)
-        XCTAssertTrue(calendar.isDate(fireDate, equalTo: referenceDate, toGranularity: .day))
+        XCTAssertEqual(result.fireAtISO8601, "2026-05-23T17:20:00+08:00")
     }
 
     func testClockExecutorRunsClockAppleScriptAfterModelExtraction() async throws {

@@ -82,7 +82,13 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
 
         let action = oneShotAction(from: payload.action)
         let title = oneShotTitle(from: payload.title, command: normalizedCommand)
-        let fireAt = oneShotFireAt(from: payload.fireAt, request: request)
+        let recoveredFireAt = try await recoverFireAtIfNeeded(
+            fireAt: payload.fireAt,
+            request: request,
+            configuration: configuration,
+            apiKey: apiKey
+        )
+        let fireAt = oneShotFireAt(from: recoveredFireAt, request: request)
         let notes = oneShotNotes(from: payload.notes, title: title, command: normalizedCommand)
 
         return AgentClockTimerParameters(action: action, title: title, fireAtISO8601: fireAt, notes: notes)
@@ -122,8 +128,56 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
             systemPrompt: systemPrompt,
             userPrompt: userPrompt,
             temperature: 0,
-            maxOutputTokens: 180
+            maxOutputTokens: 260
         )
+    }
+
+    private func buildFireAtRecoveryRequest(
+        request: AgentClockParameterExtractionRequest
+    ) -> TextGenerationRequest {
+        let referenceText = AgentClockDateFormatter.iso8601.string(from: request.referenceDate)
+        let systemPrompt = """
+        你是 PulseType 的闹钟时间提取器。只做一件事：从口令里提取 fire_at。
+
+        规则：
+        1. 只输出 JSON，不要解释，不要 Markdown。
+        2. JSON 只能有一个字段：fire_at。
+        3. fire_at 必须是 ISO-8601 完整时间（带时区），例如 2026-05-18T17:20:00+08:00。
+        4. 不允许输出空值。
+        5. 如果口令没给完整日期，你要基于参考时间推理为最近一次合理未来时间。
+        """
+
+        let userPrompt = """
+        当前参考时间：\(referenceText)
+        当前时区：\(request.timeZone.identifier)
+        用户口令：\(request.command)
+        """
+
+        return TextGenerationRequest(
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
+            temperature: 0,
+            maxOutputTokens: 120
+        )
+    }
+
+    private func recoverFireAtIfNeeded(
+        fireAt: String?,
+        request: AgentClockParameterExtractionRequest,
+        configuration: TextGenerationProviderConfiguration,
+        apiKey: String
+    ) async throws -> String? {
+        let normalized = trimmed(fireAt)
+        guard normalized.isEmpty else { return normalized }
+
+        let recovery = try await generationProvider.generateText(
+            request: buildFireAtRecoveryRequest(request: request),
+            configuration: configuration,
+            apiKey: apiKey
+        )
+        let payload = try parsePayload(from: recovery.outputText)
+        let recovered = trimmed(payload.fireAt)
+        return recovered.isEmpty ? nil : recovered
     }
 
     private func parsePayload(from output: String) throws -> ModelPayload {
@@ -194,13 +248,6 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         guard normalized.isEmpty else {
             return normalized
         }
-        if let parsed = Self.parseFireDateFromCommand(
-            request.command,
-            referenceDate: request.referenceDate,
-            timeZone: request.timeZone
-        ) {
-            return AgentClockDateFormatter.string(from: parsed, timeZone: request.timeZone)
-        }
         let fallback = Self.nextFullMinute(after: request.referenceDate)
         return AgentClockDateFormatter.string(from: fallback, timeZone: request.timeZone)
     }
@@ -217,116 +264,6 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         let epoch = date.timeIntervalSince1970
         let rounded = floor(epoch / 60.0) * 60.0 + 60.0
         return Date(timeIntervalSince1970: rounded)
-    }
-
-    private static func parseFireDateFromCommand(
-        _ command: String,
-        referenceDate: Date,
-        timeZone: TimeZone
-    ) -> Date? {
-        let text = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-
-        let dayOffset: Int = text.contains("后天") ? 2 : (text.contains("明天") ? 1 : 0)
-
-        guard let hourRaw = extractHour(from: text) else { return nil }
-        let minute = extractMinute(from: text) ?? 0
-        guard minute >= 0 && minute <= 59 else { return nil }
-
-        var hour = hourRaw
-        if text.contains("下午") || text.contains("晚上") {
-            if hour < 12 { hour += 12 }
-        } else if text.contains("中午") {
-            if hour == 0 { hour = 12 }
-            if hour < 11 { hour += 12 }
-        } else if text.contains("凌晨") {
-            if hour == 12 { hour = 0 }
-        } else if text.contains("上午") {
-            if hour == 12 { hour = 0 }
-        }
-
-        guard hour >= 0 && hour <= 23 else { return nil }
-
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = timeZone
-        let baseDay = calendar.startOfDay(for: referenceDate)
-        guard let targetDay = calendar.date(byAdding: .day, value: dayOffset, to: baseDay) else { return nil }
-        var comps = calendar.dateComponents([.year, .month, .day], from: targetDay)
-        comps.hour = hour
-        comps.minute = minute
-        comps.second = 0
-        return calendar.date(from: comps)
-    }
-
-    private static func extractHour(from text: String) -> Int? {
-        if let result = matchNumber(in: text, pattern: #"([零〇一二两三四五六七八九十百\d]+)\s*点"#) {
-            return result
-        }
-        return nil
-    }
-
-    private static func extractMinute(from text: String) -> Int? {
-        if text.contains("半") { return 30 }
-        if let result = matchNumber(in: text, pattern: #"点\s*([零〇一二两三四五六七八九十百\d]+)\s*分?"#) {
-            return result
-        }
-        return nil
-    }
-
-    private static func matchNumber(in text: String, pattern: String) -> Int? {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let match = regex.firstMatch(in: text, options: [], range: range), match.numberOfRanges >= 2 else {
-            return nil
-        }
-        guard let numberRange = Range(match.range(at: 1), in: text) else { return nil }
-        return parseChineseNumber(String(text[numberRange]))
-    }
-
-    private static func parseChineseNumber(_ raw: String) -> Int? {
-        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return nil }
-        if let numeric = Int(value) { return numeric }
-
-        let digitMap: [Character: Int] = [
-            "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
-            "五": 5, "六": 6, "七": 7, "八": 8, "九": 9
-        ]
-
-        if !value.contains("十") {
-            var sum = 0
-            for c in value {
-                guard let v = digitMap[c] else { return nil }
-                sum = sum * 10 + v
-            }
-            return sum
-        }
-
-        let parts = value.split(separator: "十", omittingEmptySubsequences: false)
-        if parts.count > 2 { return nil }
-        let left = String(parts[0])
-        let right = parts.count == 2 ? String(parts[1]) : ""
-
-        let tens: Int
-        if left.isEmpty {
-            tens = 1
-        } else if let lv = Int(left) {
-            tens = lv
-        } else {
-            guard left.count == 1, let c = left.first, let mapped = digitMap[c] else { return nil }
-            tens = mapped
-        }
-
-        let ones: Int
-        if right.isEmpty {
-            ones = 0
-        } else if let rv = Int(right) {
-            ones = rv
-        } else {
-            guard right.count == 1, let c = right.first, let mapped = digitMap[c] else { return nil }
-            ones = mapped
-        }
-        return tens * 10 + ones
     }
 
 }
