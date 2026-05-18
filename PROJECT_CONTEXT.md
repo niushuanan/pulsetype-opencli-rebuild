@@ -33,6 +33,20 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 12:40 - 修复 clock AppleScript 语法错误（-2741）
+
+- 本次任务：修复 `clock` 路径在真实执行时触发的 `syntax error (-2741)`，并保证脚本可编译执行。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 替换了 fallback 里非法的 `whose ... or ...` 语法写法，改成显式 `repeat` 遍历 button 名称匹配后点击，避免 AppleScript 解析错误。
+  - 保留前后闹钟数量验证逻辑，继续防止“假成功”。
+- 为什么这样改：
+  - 历史日志已明确报 `osascript_failed ... syntax error (-2741)`，属于脚本语法层问题，必须先消掉编译错误。
+- 影响了哪些模块：
+  - Agent clock 的 AppleScript 模板稳定性与真实执行成功率。
+
 ### 2026-05-18 12:35 - 修复 clock 误报成功 + 首页核心特点压缩到 4 行
 
 - 本次任务：修复“clock 显示成功但实际未创建闹钟”的误导问题，并按设计要求精简首页核心特点卡片文案。
