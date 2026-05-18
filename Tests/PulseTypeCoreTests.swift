@@ -481,38 +481,39 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertNotEqual(result.title, "闹钟提醒")
     }
 
-    func testClockParameterExtractorRecoversFireAtBySecondModelCallWhenMissing() async throws {
+    func testClockParameterExtractorFailsWhenFireAtMissingInOneShotOutput() async throws {
         let extractor = LLMAgentClockParameterExtractor(
             generationProvider: FakeTextGenerationProvider(
-                outputs: [
-                    """
-                    {
-                      "action": "create_one_shot_alarm",
-                      "title": "帮班主任干活",
-                      "fire_at": "",
-                      "notes": "提醒办事"
-                    }
-                    """,
-                    """
-                    {
-                      "fire_at": "2026-05-23T17:20:00+08:00"
-                    }
-                    """
-                ]
+                output: """
+                {
+                  "action": "create_one_shot_alarm",
+                  "title": "帮班主任干活",
+                  "fire_at": "",
+                  "notes": "提醒办事"
+                }
+                """
             )
         )
 
-        let result = try await extractor.extract(
-            request: AgentClockParameterExtractionRequest(
-                command: "定一个今天下午五点二十的闹钟",
-                referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
-                timeZone: TimeZone(identifier: "Asia/Shanghai")!
-            ),
-            configuration: makeTextGenerationConfiguration(),
-            apiKey: "text-key-123456"
-        )
-
-        XCTAssertEqual(result.fireAtISO8601, "2026-05-23T17:20:00+08:00")
+        do {
+            _ = try await extractor.extract(
+                request: AgentClockParameterExtractionRequest(
+                    command: "定一个今天下午五点二十的闹钟",
+                    referenceDate: Date(timeIntervalSince1970: 1_779_029_200),
+                    timeZone: TimeZone(identifier: "Asia/Shanghai")!
+                ),
+                configuration: makeTextGenerationConfiguration(),
+                apiKey: "text-key-123456"
+            )
+            XCTFail("预期 fire_at 为空时应直接失败")
+        } catch let error as AgentClockError {
+            switch error {
+            case let .modelReturnedInvalidJSON(detail):
+                XCTAssertTrue(detail.contains("missing_fire_at"))
+            default:
+                XCTFail("错误类型不符合预期: \(error)")
+            }
+        }
     }
 
     func testClockExecutorRunsClockAppleScriptAfterModelExtraction() async throws {

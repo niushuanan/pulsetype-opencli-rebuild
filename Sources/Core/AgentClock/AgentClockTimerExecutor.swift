@@ -82,13 +82,7 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
 
         let action = oneShotAction(from: payload.action)
         let title = oneShotTitle(from: payload.title, command: normalizedCommand)
-        let recoveredFireAt = try await recoverFireAtIfNeeded(
-            fireAt: payload.fireAt,
-            request: request,
-            configuration: configuration,
-            apiKey: apiKey
-        )
-        let fireAt = oneShotFireAt(from: recoveredFireAt, request: request)
+        let fireAt = try requiredFireAt(from: payload.fireAt, rawOutput: generation.outputText)
         let notes = oneShotNotes(from: payload.notes, title: title, command: normalizedCommand)
 
         return AgentClockTimerParameters(action: action, title: title, fireAtISO8601: fireAt, notes: notes)
@@ -112,6 +106,7 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         7. 如果缺少具体日期或时间，你要结合当前参考时间推理一个未来时间。
         8. notes 要补成一句简短备注，说明提醒目的。
         9. action 只能是 create_one_shot_alarm。
+        10. 你输出前必须自检：fire_at 不允许为空，不允许 null，不允许省略。
         """
 
         let userPrompt = """
@@ -128,56 +123,8 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
             systemPrompt: systemPrompt,
             userPrompt: userPrompt,
             temperature: 0,
-            maxOutputTokens: 260
+            maxOutputTokens: 320
         )
-    }
-
-    private func buildFireAtRecoveryRequest(
-        request: AgentClockParameterExtractionRequest
-    ) -> TextGenerationRequest {
-        let referenceText = AgentClockDateFormatter.iso8601.string(from: request.referenceDate)
-        let systemPrompt = """
-        你是 PulseType 的闹钟时间提取器。只做一件事：从口令里提取 fire_at。
-
-        规则：
-        1. 只输出 JSON，不要解释，不要 Markdown。
-        2. JSON 只能有一个字段：fire_at。
-        3. fire_at 必须是 ISO-8601 完整时间（带时区），例如 2026-05-18T17:20:00+08:00。
-        4. 不允许输出空值。
-        5. 如果口令没给完整日期，你要基于参考时间推理为最近一次合理未来时间。
-        """
-
-        let userPrompt = """
-        当前参考时间：\(referenceText)
-        当前时区：\(request.timeZone.identifier)
-        用户口令：\(request.command)
-        """
-
-        return TextGenerationRequest(
-            systemPrompt: systemPrompt,
-            userPrompt: userPrompt,
-            temperature: 0,
-            maxOutputTokens: 120
-        )
-    }
-
-    private func recoverFireAtIfNeeded(
-        fireAt: String?,
-        request: AgentClockParameterExtractionRequest,
-        configuration: TextGenerationProviderConfiguration,
-        apiKey: String
-    ) async throws -> String? {
-        let normalized = trimmed(fireAt)
-        guard normalized.isEmpty else { return normalized }
-
-        let recovery = try await generationProvider.generateText(
-            request: buildFireAtRecoveryRequest(request: request),
-            configuration: configuration,
-            apiKey: apiKey
-        )
-        let payload = try parsePayload(from: recovery.outputText)
-        let recovered = trimmed(payload.fireAt)
-        return recovered.isEmpty ? nil : recovered
     }
 
     private func parsePayload(from output: String) throws -> ModelPayload {
@@ -240,16 +187,15 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         return normalized == "create_one_shot_alarm" ? normalized : "create_one_shot_alarm"
     }
 
-    private func oneShotFireAt(
-        from value: String?,
-        request: AgentClockParameterExtractionRequest
-    ) -> String {
+    private func requiredFireAt(from value: String?, rawOutput: String) throws -> String {
         let normalized = trimmed(value)
-        guard normalized.isEmpty else {
-            return normalized
+        guard !normalized.isEmpty else {
+            throw AgentClockError.modelReturnedInvalidJSON("missing_fire_at|\(rawOutput)")
         }
-        let fallback = Self.nextFullMinute(after: request.referenceDate)
-        return AgentClockDateFormatter.string(from: fallback, timeZone: request.timeZone)
+        guard AgentClockDateFormatter.iso8601.date(from: normalized) != nil else {
+            throw AgentClockError.modelReturnedInvalidJSON("invalid_fire_at|\(rawOutput)")
+        }
+        return normalized
     }
 
     private func oneShotNotes(from value: String?, title: String, command: String) -> String {
@@ -258,12 +204,6 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
             return normalized
         }
         return "提醒：\(title)。来源口令：\(command)"
-    }
-
-    private static func nextFullMinute(after date: Date) -> Date {
-        let epoch = date.timeIntervalSince1970
-        let rounded = floor(epoch / 60.0) * 60.0 + 60.0
-        return Date(timeIntervalSince1970: rounded)
     }
 
 }
