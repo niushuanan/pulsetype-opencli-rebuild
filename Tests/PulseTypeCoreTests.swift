@@ -451,15 +451,16 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(result.notes, "提醒起床")
     }
 
-    func testClockExecutorSchedulesTimerAfterModelExtraction() async throws {
-        let scheduler = FakeAgentClockScheduler(
-            result: AgentClockScheduleResult(success: true, identifier: "clock-1", detail: "scheduled")
+    func testClockExecutorRunsClockAppleScriptAfterModelExtraction() async throws {
+        let runner = FakeAgentClockRunner(
+            result: AgentClockExecutionResult(success: true, identifier: "clock-1", detail: "alarm_created")
         )
         let executor = AgentClockTimerExecutor(
             parameterExtractor: LLMAgentClockParameterExtractor(
                 generationProvider: FakeTextGenerationProvider(
                     output: """
                     {
+                      "action": "create_one_shot_alarm",
                       "title": "会议提醒",
                       "fire_at": "2026-05-23T20:30:00+08:00",
                       "notes": "提醒开会"
@@ -467,7 +468,7 @@ final class PulseTypeCoreTests: XCTestCase {
                     """
                 )
             ),
-            scheduler: scheduler
+            runner: runner
         )
 
         let outcome = await executor.execute(
@@ -483,8 +484,9 @@ final class PulseTypeCoreTests: XCTestCase {
 
         XCTAssertEqual(outcome.status, .success)
         XCTAssertEqual(outcome.outputText, "已设置闹钟：会议提醒。")
-        XCTAssertEqual(scheduler.scheduledSpecs.first?.title, "会议提醒")
-        XCTAssertEqual(scheduler.scheduledSpecs.first?.notes, "提醒开会")
+        XCTAssertEqual(runner.executedSpecs.first?.title, "会议提醒")
+        XCTAssertEqual(runner.executedSpecs.first?.notes, "提醒开会")
+        XCTAssertEqual(runner.executedSpecs.first?.action, "create_one_shot_alarm")
         XCTAssertTrue(outcome.evidenceSummary.contains("apple.clock.timer"))
     }
 
@@ -970,16 +972,16 @@ final class FakeAgentCalendarScriptRunner: AgentCalendarScriptRunning, @unchecke
     }
 }
 
-final class FakeAgentClockScheduler: AgentClockTimerScheduling, @unchecked Sendable {
-    private(set) var scheduledSpecs: [AgentClockTimerSpec] = []
-    private let result: AgentClockScheduleResult
+final class FakeAgentClockRunner: AgentClockScriptRunning, @unchecked Sendable {
+    private(set) var executedSpecs: [AgentClockTimerSpec] = []
+    private let result: AgentClockExecutionResult
 
-    init(result: AgentClockScheduleResult) {
+    init(result: AgentClockExecutionResult) {
         self.result = result
     }
 
-    func scheduleTimer(_ spec: AgentClockTimerSpec) async -> AgentClockScheduleResult {
-        scheduledSpecs.append(spec)
+    func execute(_ spec: AgentClockTimerSpec) async -> AgentClockExecutionResult {
+        executedSpecs.append(spec)
         return result
     }
 }

@@ -33,6 +33,25 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-05-18 12:30 - Clock 改为「受限 JSON + AppleScript 模板填参」，从通知提醒切到 Clock.app 路径
+
+- 本次任务：把 `apple.clock.timer` 从“本地通知提醒”改为“Router 后二次模型提取 + AppleScript 模板执行”，并保持一次性闹钟语义。
+- 改了哪些文件：
+  - `Sources/Core/AgentClock/AgentClockTimerExecutor.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - `LLMAgentClockParameterExtractor` 输出协议升级为受限 JSON：`action/title/fire_at/notes`，其中 `action` 强制收敛到 `create_one_shot_alarm`。
+  - 新增并接入 `AppleScriptAgentClockRunner`：执行器不再直接调通知中心，而是把模型结果填入固定 AppleScript 模板，尝试在 `Clock.app` 里走“闹钟”页和新建流程。
+  - `AgentClockTimerExecutor` 的执行结果改为脚本执行结果证据，历史里会记录 `action`、`fire_at`、`identifier`、`result`。
+  - 删除旧的通知调度实现（`UNUserNotificationCenter` 路径），clock 工具职责收敛为模板化脚本执行。
+  - 测试同步改造：把 `FakeAgentClockScheduler` 改为 `FakeAgentClockRunner`，并新增/更新 `clock` 用例覆盖脚本执行链路与路由结果。
+- 为什么这样改：
+  - 用户希望 clock 走“真实闹钟”路径，而不是只弹一条通知。
+  - 架构上坚持“模型只出受限结构化参数，执行器负责模板填参和动作执行”，避免模型自由产出脚本导致不稳定。
+- 影响了哪些模块：
+  - Agent clock 参数协议、clock 执行器、Agent 历史证据结构、clock 相关测试桩与断言。
+
 ### 2026-05-18 12:05 - Router 软约束推理 + Calendar notes 补齐 + 新增 Clock 闹钟路径
 
 - 本次任务：按 Agent 新规划完成三件事：Router 改为软约束推理、Calendar 自动补齐备注、新增 `clock` 工具完整路径（前后端 + 测试）。

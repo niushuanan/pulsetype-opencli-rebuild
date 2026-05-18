@@ -1,5 +1,4 @@
 import Foundation
-import UserNotifications
 
 struct AgentClockParameterExtractionRequest: Equatable {
     let command: String
@@ -8,6 +7,7 @@ struct AgentClockParameterExtractionRequest: Equatable {
 }
 
 struct AgentClockTimerParameters: Equatable {
+    let action: String
     let title: String
     let fireAtISO8601: String
     let notes: String
@@ -44,11 +44,13 @@ protocol AgentClockParameterExtracting: Sendable {
 
 struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
     private struct ModelPayload: Decodable {
+        let action: String?
         let title: String?
         let fireAt: String?
         let notes: String?
 
         enum CodingKeys: String, CodingKey {
+            case action
             case title
             case fireAt = "fire_at"
             case notes
@@ -78,11 +80,12 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
         )
         let payload = try parsePayload(from: generation.outputText)
 
+        let action = oneShotAction(from: payload.action)
         let title = oneShotTitle(from: payload.title, command: normalizedCommand)
         let fireAt = oneShotFireAt(from: payload.fireAt, request: request)
         let notes = oneShotNotes(from: payload.notes, title: title, command: normalizedCommand)
 
-        return AgentClockTimerParameters(title: title, fireAtISO8601: fireAt, notes: notes)
+        return AgentClockTimerParameters(action: action, title: title, fireAtISO8601: fireAt, notes: notes)
     }
 
     private func buildGenerationRequest(
@@ -95,12 +98,13 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
 
         规则：
         1. 只输出 JSON，不要输出解释、Markdown、代码块。
-        2. 输出字段必须包含 title、fire_at、notes。
+        2. 输出字段必须包含 action、title、fire_at、notes。
         3. fire_at 必须是 ISO-8601，例如 2026-05-23T09:00:00+08:00。
         4. 这是一次性路径，不追问、不确认。
         5. 如果缺少标题，你要基于语义生成短标题。
         6. 如果缺少具体日期或时间，你要结合当前参考时间推理一个未来时间。
         7. notes 要补成一句简短备注，说明提醒目的。
+        8. action 只能是 create_one_shot_alarm。
         """
 
         let userPrompt = """
@@ -148,6 +152,11 @@ struct LLMAgentClockParameterExtractor: AgentClockParameterExtracting {
     private func oneShotTitle(from value: String?, command: String) -> String {
         let normalized = trimmed(value)
         return normalized.isEmpty ? "闹钟：\(command)" : normalized
+    }
+
+    private func oneShotAction(from value: String?) -> String {
+        let normalized = trimmed(value).lowercased()
+        return normalized == "create_one_shot_alarm" ? normalized : "create_one_shot_alarm"
     }
 
     private func oneShotFireAt(
@@ -213,6 +222,7 @@ protocol AgentClockTimerControlling {
 }
 
 struct AgentClockTimerSpec: Equatable {
+    let action: String
     let title: String
     let notes: String
     let fireAt: Date
@@ -225,90 +235,107 @@ struct AgentClockTimerSpec: Equatable {
         self.fireAt = fireAt
         self.timeZone = timeZone
 
+        self.action = parameters.action.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "create_one_shot_alarm"
+            : parameters.action
         let normalizedTitle = parameters.title.trimmingCharacters(in: .whitespacesAndNewlines)
         self.title = normalizedTitle.isEmpty ? "闹钟提醒" : normalizedTitle
         self.notes = parameters.notes.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
-struct AgentClockScheduleResult: Equatable {
+struct AgentClockExecutionResult: Equatable {
     let success: Bool
     let identifier: String
     let detail: String
 }
 
-protocol AgentClockTimerScheduling: Sendable {
-    func scheduleTimer(_ spec: AgentClockTimerSpec) async -> AgentClockScheduleResult
+protocol AgentClockScriptRunning: Sendable {
+    func execute(_ spec: AgentClockTimerSpec) async -> AgentClockExecutionResult
 }
 
-struct UserNotificationAgentClockScheduler: AgentClockTimerScheduling {
-    func scheduleTimer(_ spec: AgentClockTimerSpec) async -> AgentClockScheduleResult {
-        let center = UNUserNotificationCenter.current()
-        do {
-            let granted = try await requestAuthorization(center: center)
-            guard granted else {
-                return AgentClockScheduleResult(success: false, identifier: "", detail: "notification_permission_denied")
-            }
+struct AppleScriptAgentClockRunner: AgentClockScriptRunning {
+    func execute(_ spec: AgentClockTimerSpec) async -> AgentClockExecutionResult {
+        let calendar = Calendar(identifier: .gregorian)
+        let comps = calendar.dateComponents(in: spec.timeZone, from: spec.fireAt)
+        let hour24 = comps.hour ?? 0
+        let minute = comps.minute ?? 0
+        let hour12 = ((hour24 + 11) % 12) + 1
+        let periodToken = hour24 < 12 ? "AM" : "PM"
+        let timeText = String(format: "%d:%02d %@", hour12, minute, periodToken)
+        let identifier = UUID().uuidString
 
-            let content = UNMutableNotificationContent()
-            content.title = spec.title
-            content.body = spec.notes.isEmpty ? "到点了" : spec.notes
-            content.sound = .default
+        let lines = [
+            "on run argv",
+            "set targetLabel to item 1 of argv",
+            "set timeText to item 2 of argv",
+            "set alarmID to item 3 of argv",
+            "tell application \"Clock\" to activate",
+            "delay 0.35",
+            "tell application \"System Events\"",
+            "if UI elements enabled is false then return \"clock_error|detail=accessibility_denied\"",
+            "tell process \"Clock\"",
+            "set frontmost to true",
+            "set clickedTab to false",
+            "try",
+            "repeat with b in (every button of toolbar 1 of window 1)",
+            "set n to \"\"",
+            "try",
+            "set n to (name of b) as string",
+            "end try",
+            "if n contains \"Alarm\" or n contains \"Alarms\" or n contains \"闹钟\" then",
+            "click b",
+            "set clickedTab to true",
+            "exit repeat",
+            "end if",
+            "end repeat",
+            "end try",
+            "if clickedTab is false then",
+            "try",
+            "click (first button of window 1 whose name contains \"Alarm\" or name contains \"闹钟\")",
+            "set clickedTab to true",
+            "end try",
+            "end if",
+            "delay 0.2",
+            "keystroke \"n\" using {command down}",
+            "delay 0.25",
+            "keystroke timeText",
+            "key code 36",
+            "delay 0.2",
+            "if targetLabel is not \"\" then",
+            "try",
+            "set value of first text field of sheet 1 of window 1 to targetLabel",
+            "end try",
+            "end if",
+            "key code 36",
+            "return \"alarm_created|clock_app=true|once=true|time=\" & timeText & \"|alarm_id=\" & alarmID",
+            "end tell",
+            "end tell",
+            "end run"
+        ]
 
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = spec.timeZone
-            let components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: spec.fireAt)
-            let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
-            let identifier = "pulsetype.clock.timer.\(UUID().uuidString)"
-            let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
-            try await addNotification(center: center, request: request)
-
-            return AgentClockScheduleResult(
-                success: true,
-                identifier: identifier,
-                detail: "scheduled"
-            )
-        } catch {
-            return AgentClockScheduleResult(success: false, identifier: "", detail: error.localizedDescription)
+        let result = runClockAppleScript(lines: lines, arguments: [spec.title, timeText, identifier])
+        guard result.exitCode == 0 else {
+            return AgentClockExecutionResult(success: false, identifier: "", detail: "osascript_failed:\(result.stderr)")
         }
-    }
-
-    private func requestAuthorization(center: UNUserNotificationCenter) async throws -> Bool {
-        try await withCheckedThrowingContinuation { continuation in
-            center.requestAuthorization(options: [.alert, .sound]) { granted, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: granted)
-                }
-            }
+        guard result.stdout.contains("alarm_created") else {
+            return AgentClockExecutionResult(success: false, identifier: "", detail: result.stdout.isEmpty ? "verification_failed" : result.stdout)
         }
-    }
-
-    private func addNotification(center: UNUserNotificationCenter, request: UNNotificationRequest) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            center.add(request) { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: ())
-                }
-            }
-        }
+        return AgentClockExecutionResult(success: true, identifier: identifier, detail: result.stdout)
     }
 }
 
 @MainActor
 final class AgentClockTimerExecutor: AgentClockTimerControlling {
     private let parameterExtractor: any AgentClockParameterExtracting
-    private let scheduler: any AgentClockTimerScheduling
+    private let runner: any AgentClockScriptRunning
 
     init(
         parameterExtractor: any AgentClockParameterExtracting = LLMAgentClockParameterExtractor(),
-        scheduler: any AgentClockTimerScheduling = UserNotificationAgentClockScheduler()
+        runner: any AgentClockScriptRunning = AppleScriptAgentClockRunner()
     ) {
         self.parameterExtractor = parameterExtractor
-        self.scheduler = scheduler
+        self.runner = runner
     }
 
     func execute(
@@ -327,11 +354,11 @@ final class AgentClockTimerExecutor: AgentClockTimerControlling {
                 apiKey: apiKey
             )
             let spec = try AgentClockTimerSpec(parameters: parameters, timeZone: request.timeZone)
-            let scheduleResult = await scheduler.scheduleTimer(spec)
-            let evidence = composeEvidence(traceID: request.traceID, spec: spec, result: scheduleResult)
+            let executionResult = await runner.execute(spec)
+            let evidence = composeEvidence(traceID: request.traceID, spec: spec, result: executionResult)
 
-            guard scheduleResult.success else {
-                return failure(message: AgentClockError.scheduleFailed(scheduleResult.detail).localizedDescription, evidence: evidence)
+            guard executionResult.success else {
+                return failure(message: AgentClockError.scheduleFailed(executionResult.detail).localizedDescription, evidence: evidence)
             }
 
             let output = "已设置闹钟：\(spec.title)。"
@@ -357,11 +384,12 @@ final class AgentClockTimerExecutor: AgentClockTimerControlling {
     private func composeEvidence(
         traceID: String,
         spec: AgentClockTimerSpec,
-        result: AgentClockScheduleResult
+        result: AgentClockExecutionResult
     ) -> String {
         [
             "apple.clock.timer",
             "trace_id=\(sanitizeClockEvidenceValue(traceID))",
+            "action=\(sanitizeClockEvidenceValue(spec.action))",
             "title=\(sanitizeClockEvidenceValue(spec.title))",
             "fire_at=\(AgentClockDateFormatter.iso8601.string(from: spec.fireAt))",
             "identifier=\(sanitizeClockEvidenceValue(result.identifier))",
@@ -376,6 +404,39 @@ final class AgentClockTimerExecutor: AgentClockTimerControlling {
             outputText: nil,
             evidenceSummary: evidence
         )
+    }
+}
+
+private struct ClockAppleScriptExecution {
+    let exitCode: Int32
+    let stdout: String
+    let stderr: String
+}
+
+private func runClockAppleScript(lines: [String], arguments: [String]) -> ClockAppleScriptExecution {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    process.arguments = lines.flatMap { ["-e", $0] } + arguments
+
+    let stdoutPipe = Pipe()
+    let stderrPipe = Pipe()
+    process.standardOutput = stdoutPipe
+    process.standardError = stderrPipe
+
+    do {
+        try process.run()
+        process.waitUntilExit()
+        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        return ClockAppleScriptExecution(
+            exitCode: process.terminationStatus,
+            stdout: String(data: stdoutData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            stderr: String(data: stderrData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        )
+    } catch {
+        return ClockAppleScriptExecution(exitCode: 1, stdout: "", stderr: error.localizedDescription)
     }
 }
 
