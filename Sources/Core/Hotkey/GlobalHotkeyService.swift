@@ -158,10 +158,26 @@ final class GlobalHotkeyService {
     }
 
     func updateSessionPhase(_ phase: SessionPhase) {
+        let previousPhase = currentSessionPhase
         currentSessionPhase = phase
         if phase != .listening {
             wakeHoldSessionActive = false
             agentHoldSessionActive = false
+        }
+
+        let previousShouldHandle = shouldHandleCancel(for: previousPhase)
+        let currentShouldHandle = shouldHandleCancelInput
+        if previousShouldHandle != currentShouldHandle {
+            hotkeyStateStore.setCancelShortcutActive(currentShouldHandle)
+        }
+    }
+
+    private func shouldHandleCancel(for phase: SessionPhase) -> Bool {
+        switch phase {
+        case .listening, .transcribing, .textProcessing, .inserting:
+            return true
+        case .idle, .cancelled, .error:
+            return false
         }
     }
 

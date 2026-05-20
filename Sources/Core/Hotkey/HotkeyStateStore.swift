@@ -148,6 +148,7 @@ final class HotkeyStateStore: ObservableObject {
     private let now: () -> Date
     private var cancellables = Set<AnyCancellable>()
     private var isApplyingFixedCancelShortcut = false
+    private var isCancelShortcutEnabled = false
 
     private let wakeModeStorageKey = "hotkeys.wake.mode.v1"
     private let cancelModeStorageKey = "hotkeys.cancel.mode.v1"
@@ -178,7 +179,6 @@ final class HotkeyStateStore: ObservableObject {
         self.cancelShortcutRegistered = false
         self.lastUpdatedAt = now()
 
-        enforceFixedCancelShortcut()
         refresh()
 
         notificationCenter.publisher(for: Self.shortcutDidChangeNotification)
@@ -210,7 +210,9 @@ final class HotkeyStateStore: ObservableObject {
             defaults.set(mode.rawValue, forKey: wakeModeStorageKey)
         case .cancelSession:
             _ = mode
-            enforceFixedCancelShortcut()
+            if isCancelShortcutEnabled {
+                enforceFixedCancelShortcut()
+            }
         default:
             return false
         }
@@ -277,12 +279,26 @@ final class HotkeyStateStore: ObservableObject {
         }
     }
 
+    func setCancelShortcutActive(_ active: Bool) {
+        guard isCancelShortcutEnabled != active else {
+            return
+        }
+        isCancelShortcutEnabled = active
+        isApplyingFixedCancelShortcut = true
+        if active {
+            enforceFixedCancelShortcut()
+        } else {
+            KeyboardShortcuts.disable(.cancelSession)
+            cancelShortcutRegistered = false
+            lastUpdatedAt = now()
+        }
+        isApplyingFixedCancelShortcut = false
+    }
+
     private func enforceFixedCancelShortcut() {
         cancelTriggerMode = .shortcut
         defaults.set(HotkeyTriggerMode.shortcut.rawValue, forKey: cancelModeStorageKey)
-        isApplyingFixedCancelShortcut = true
         KeyboardShortcuts.setShortcut(fixedCancelShortcut, for: .cancelSession)
-        isApplyingFixedCancelShortcut = false
     }
 
     private static func loadModifier(defaults: UserDefaults, key: String, fallback: HotkeyModifier) -> HotkeyModifier {
