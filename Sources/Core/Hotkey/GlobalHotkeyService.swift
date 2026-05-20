@@ -155,6 +155,8 @@ final class GlobalHotkeyService {
 
         installModifierMonitors()
         refreshRuntimeState()
+
+        hotkeyStateStore.setCancelShortcutActive(false)
     }
 
     func updateSessionPhase(_ phase: SessionPhase) {
