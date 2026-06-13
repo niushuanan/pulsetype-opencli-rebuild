@@ -488,7 +488,7 @@ final class GlobalHotkeyService {
         guard currentSessionPhase == .listening else {
             return
         }
-        interactionCoordinator.handleStopInput()
+        interactionCoordinator.handleWakeInput(context: .dictationHold)
     }
 
     private func registerForeignInput() {
@@ -620,7 +620,7 @@ final class GlobalHotkeyService {
         guard currentSessionPhase == .listening, currentInputLane == .agentMusic else {
             return
         }
-        interactionCoordinator.handleStopInput()
+        interactionCoordinator.handleWakeInput(context: .agentHold)
     }
 
     private var canStartAgentHoldSession: Bool {

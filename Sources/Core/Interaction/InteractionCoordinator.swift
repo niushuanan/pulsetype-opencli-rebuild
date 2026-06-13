@@ -2,6 +2,13 @@ import AppKit
 import Combine
 import Foundation
 
+private enum RecordingStopTrigger: String {
+    case manual
+    case dictationTap
+    case dictationHoldRelease
+    case agentHoldRelease
+}
+
 @MainActor
 final class InteractionCoordinator {
     private let sessionStore: SessionStore
@@ -25,6 +32,7 @@ final class InteractionCoordinator {
     private var currentDictationTarget: DictationWritebackTarget?
     private var lastExternalDictationTarget: DictationWritebackTarget?
     private var currentTraceID: String?
+    private var currentSessionStartSource: WakeInvocationContext.Source?
 
     init(
         sessionStore: SessionStore,
@@ -72,15 +80,15 @@ final class InteractionCoordinator {
                 sessionStore.fail(message: "开始语音输入前，需要先允许麦克风权限。")
                 return
             }
-            startRecording(lane: context.lane)
+            startRecording(lane: context.lane, source: context.source)
         case .listening:
-            handleStopInput()
+            handleStopInput(trigger: stopTrigger(for: context.source))
         case .transcribing, .textProcessing, .inserting:
             break
         }
     }
 
-    func handleStopInput() {
+    private func handleStopInput(trigger: RecordingStopTrigger = .manual) {
         guard sessionStore.phase == .listening else {
             return
         }
@@ -98,6 +106,7 @@ final class InteractionCoordinator {
                 model: configuration.modelName,
                 httpStatus: nil,
                 stage: "recording.stop",
+                detail: "trigger=\(trigger.rawValue)|started_by=\(currentSessionStartSource?.rawValue ?? "unknown")",
                 audioDuration: clip.duration
             )
             discardPendingClipIfNeeded()
@@ -118,10 +127,10 @@ final class InteractionCoordinator {
                 httpStatus: nil,
                 stage: "recording.stop.failed",
                 errorType: "audioStopFailed",
-                detail: error.localizedDescription
+                detail: "trigger=\(trigger.rawValue)|\(error.localizedDescription)"
             )
             sessionStore.fail(message: "停止录音失败：\(error.localizedDescription)")
-            currentTraceID = nil
+            clearSessionTraceState()
         }
     }
 
@@ -167,7 +176,7 @@ final class InteractionCoordinator {
             stage: "history.cancelled",
             audioDuration: clipDuration
         )
-        currentTraceID = nil
+        clearSessionTraceState()
     }
 
     func handleResetInput() {
@@ -180,13 +189,14 @@ final class InteractionCoordinator {
         }
         discardPendingClipIfNeeded()
         sessionStore.reset()
-        currentTraceID = nil
+        clearSessionTraceState()
     }
 
-    private func startRecording(lane: InputLane) {
+    private func startRecording(lane: InputLane, source: WakeInvocationContext.Source) {
         let configuration = providerSettingsStore.configuration
         let traceID = UUID().uuidString
         currentTraceID = traceID
+        currentSessionStartSource = source
         currentDictationTarget = lane == .directDictation ? resolveDictationWritebackTarget() : nil
 
         do {
@@ -202,7 +212,8 @@ final class InteractionCoordinator {
                 provider: configuration.providerName,
                 model: configuration.modelName,
                 httpStatus: nil,
-                stage: "session.start"
+                stage: "session.start",
+                detail: "source=\(source.rawValue)"
             )
         } catch {
             currentDictationTarget = nil
@@ -215,9 +226,9 @@ final class InteractionCoordinator {
                 httpStatus: nil,
                 stage: "session.start.failed",
                 errorType: "audioStartFailed",
-                detail: error.localizedDescription
+                detail: "source=\(source.rawValue)|\(error.localizedDescription)"
             )
-            currentTraceID = nil
+            clearSessionTraceState()
         }
     }
 
@@ -288,7 +299,7 @@ final class InteractionCoordinator {
                     model: outcome.result.modelName,
                     httpStatus: nil,
                     stage: "asr.success",
-                    detail: "attempts=\(outcome.attempts)",
+                    detail: "attempts=\(outcome.attempts)|preview=\(logPreview(outcome.result.transcript))",
                     audioDuration: clip.duration,
                     transcriptLength: outcome.result.transcript.count
                 )
@@ -459,7 +470,7 @@ final class InteractionCoordinator {
             audioDuration: clip.duration
         )
         sessionStore.fail(message: message)
-        currentTraceID = nil
+        clearSessionTraceState()
     }
 
     private func executeAgentCommand(
@@ -686,7 +697,7 @@ final class InteractionCoordinator {
         } else {
             sessionStore.fail(message: outcomeMessage)
         }
-        currentTraceID = nil
+        clearSessionTraceState()
     }
 
     private func finishAgentFailure(
@@ -730,7 +741,7 @@ final class InteractionCoordinator {
             transcriptLength: transcription.transcript.count
         )
         sessionStore.fail(message: message)
-        currentTraceID = nil
+        clearSessionTraceState()
     }
 
     private func outputDictationTranscript(
@@ -817,12 +828,12 @@ final class InteractionCoordinator {
                 model: finalTranscription.modelName,
                 httpStatus: nil,
                 stage: "write.success",
-                detail: "path=\(outputResult.path.rawValue)",
+                detail: "path=\(outputResult.path.rawValue)|preview=\(logPreview(finalTranscription.transcript))",
                 audioDuration: audioDurationSeconds,
                 transcriptLength: finalTranscription.transcript.count
             )
             currentDictationTarget = nil
-            currentTraceID = nil
+            clearSessionTraceState()
         } catch let outputError as TextOutputError {
             handleWriteFailure(
                 outputError,
@@ -992,7 +1003,7 @@ final class InteractionCoordinator {
         )
         currentDictationTarget = nil
         sessionStore.fail(message: message)
-        currentTraceID = nil
+        clearSessionTraceState()
     }
 
     private func actionableOutputMessage(
@@ -1017,6 +1028,22 @@ final class InteractionCoordinator {
         }
     }
 
+    private func stopTrigger(for source: WakeInvocationContext.Source) -> RecordingStopTrigger {
+        switch source {
+        case .dictationTap:
+            return .dictationTap
+        case .dictationHold:
+            return .dictationHoldRelease
+        case .agentHold:
+            return .agentHoldRelease
+        }
+    }
+
+    private func clearSessionTraceState() {
+        currentTraceID = nil
+        currentSessionStartSource = nil
+    }
+
     private func resolveDictationWritebackTarget() -> DictationWritebackTarget? {
         let focusContext = contextDetector.focusedAppContext()
         if focusContext.bundleID == Bundle.main.bundleIdentifier {
@@ -1032,6 +1059,20 @@ final class InteractionCoordinator {
         )
         lastExternalDictationTarget = target
         return target
+    }
+
+    private func logPreview(_ text: String) -> String {
+        let compact = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\n", with: " ")
+        guard !compact.isEmpty else {
+            return "空"
+        }
+        if compact.count <= 32 {
+            return compact
+        }
+        let endIndex = compact.index(compact.startIndex, offsetBy: 32)
+        return String(compact[..<endIndex]) + "…"
     }
 
     private func ensureTraceID() -> String {

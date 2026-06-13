@@ -27,9 +27,11 @@ struct DashScopeASRPayload: Encodable {
         let resultFormat: String
 
         struct ASROptions: Encodable {
+            let language: String?
             let enableITN: Bool
 
             enum CodingKeys: String, CodingKey {
+                case language
                 case enableITN = "enable_itn"
             }
         }
@@ -274,6 +276,136 @@ enum DashScopeResponseParser {
             return trimmed.isEmpty ? nil : trimmed
         }
         return nil
+    }
+}
+
+enum DashScopeTranscriptGuard {
+    private static let lowSignalPhrases: Set<String> = [
+        "嗯",
+        "嗯。",
+        "啊",
+        "啊。",
+        "哦",
+        "哦。",
+        "呃",
+        "呃。",
+        "thank you",
+        "thank you.",
+        "thanks",
+        "thanks.",
+        "ok",
+        "ok.",
+        "okay",
+        "okay."
+    ]
+
+    static func shouldRetryWithChineseHint(
+        transcript: String,
+        audioDuration: TimeInterval
+    ) -> Bool {
+        let normalized = normalize(transcript)
+        guard !normalized.isEmpty else {
+            return false
+        }
+
+        if audioDuration >= 20, normalized.count <= 30 {
+            return true
+        }
+
+        guard audioDuration >= 2.5 else {
+            return false
+        }
+
+        if normalized.count <= 2 {
+            return true
+        }
+
+        if lowSignalPhrases.contains(normalized.lowercased()) {
+            return true
+        }
+
+        if containsOnlyBasicLatinText(normalized), normalized.count <= 20 {
+            return true
+        }
+
+        return false
+    }
+
+    static func shouldRejectAfterChineseHintRetry(
+        transcript: String,
+        audioDuration: TimeInterval
+    ) -> Bool {
+        let normalized = normalize(transcript)
+        guard !normalized.isEmpty else {
+            return true
+        }
+
+        if audioDuration >= 20, normalized.count <= 30 {
+            return true
+        }
+
+        guard audioDuration >= 2.5 else {
+            return false
+        }
+
+        if normalized.count <= 2 {
+            return true
+        }
+
+        if lowSignalPhrases.contains(normalized.lowercased()) {
+            return true
+        }
+
+        return false
+    }
+
+    static func suspiciousTranscriptFailureMessage(
+        originalTranscript: String,
+        retriedTranscript: String?,
+        audioDuration: TimeInterval
+    ) -> String {
+        let originalPreview = preview(originalTranscript)
+        let retriedPreview = preview(retriedTranscript ?? "")
+        let duration = String(format: "%.1f", audioDuration)
+        return "识别结果异常：\(duration) 秒录音返回了明显不可信的短结果。首次结果「\(originalPreview)」；中文重试结果「\(retriedPreview)」。"
+    }
+
+    private static func normalize(_ transcript: String) -> String {
+        transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func containsOnlyBasicLatinText(_ text: String) -> Bool {
+        let letters = CharacterSet.letters
+        let decimals = CharacterSet.decimalDigits
+        let allowedPunctuation = CharacterSet(charactersIn: " .,!?;:'\"-()[]{}")
+
+        var sawLetter = false
+        for scalar in text.unicodeScalars {
+            if letters.contains(scalar) {
+                sawLetter = true
+                guard scalar.isASCII else {
+                    return false
+                }
+                continue
+            }
+            if decimals.contains(scalar) || allowedPunctuation.contains(scalar) || CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                continue
+            }
+            return false
+        }
+        return sawLetter
+    }
+
+    private static func preview(_ transcript: String) -> String {
+        let compact = normalize(transcript).replacingOccurrences(of: "\n", with: " ")
+        guard !compact.isEmpty else {
+            return "空"
+        }
+        if compact.count <= 24 {
+            return compact
+        }
+        let endIndex = compact.index(compact.startIndex, offsetBy: 24)
+        return String(compact[..<endIndex]) + "…"
     }
 }
 

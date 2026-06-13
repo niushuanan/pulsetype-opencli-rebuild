@@ -35,16 +35,25 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(store.textConfig.modelName, "claude-3-5-sonnet-latest")
     }
 
-    func testHotkeyStoreAllowsWakeAndAgentUsingSameModifier() {
+    func testHotkeyStoreMigratesSharedWakeAndAgentModifierToDedicatedAgentKey() {
+        let defaults = makeDefaults()
+        defaults.set(HotkeyTriggerMode.modifierTap.rawValue, forKey: "hotkeys.wake.mode.v1")
+        defaults.set(HotkeyModifier.rightShift.rawValue, forKey: "hotkeys.wake.modifier.v1")
+        defaults.set(HotkeyModifier.rightShift.rawValue, forKey: "hotkeys.agent.modifier.v1")
+
+        let store = HotkeyStateStore(defaults: defaults)
+
+        XCTAssertEqual(store.wakeModifier, .rightShift)
+        XCTAssertEqual(store.agentModifier, .rightCommand)
+    }
+
+    func testHotkeyStoreRejectsUsingSameModifierForWakeAndAgent() {
         let defaults = makeDefaults()
         let store = HotkeyStateStore(defaults: defaults)
 
-        _ = store.setTriggerMode(.modifierTap, for: .wakeSession)
-        _ = store.setModifier(.rightShift, for: .wakeSession)
-        _ = store.setAgentModifier(.rightShift)
-
-        XCTAssertFalse(store.hasConflict)
-        XCTAssertNil(store.conflictMessage)
+        XCTAssertFalse(store.setAgentModifier(.rightShift))
+        XCTAssertEqual(store.wakeModifier, .rightShift)
+        XCTAssertEqual(store.agentModifier, .rightCommand)
     }
 
     func testAgentMusicCapabilityDefaultsToEnabledAndCanBeTurnedOff() {
@@ -646,6 +655,138 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertEqual(transcript, "")
     }
 
+    func testDashScopeProviderRetriesSuspiciousEnglishHallucinationWithChineseLanguageHint() async throws {
+        let directory = makeTemporaryDirectory()
+        let clipURL = directory.appendingPathComponent("clip.wav")
+        try Data("fake wav".utf8).write(to: clipURL)
+
+        let capture = MockHTTPExchangeCapture(responses: [
+            .ok("""
+            {
+              "output": {
+                "choices": [
+                  {
+                    "message": {
+                      "role": "assistant",
+                      "content": [
+                        { "text": "Thank you." }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+            """),
+            .ok("""
+            {
+              "output": {
+                "choices": [
+                  {
+                    "message": {
+                      "role": "assistant",
+                      "content": [
+                        { "text": "这是一次中文长句测试。" }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+            """)
+        ])
+        let provider = DashScopeQwenASRProvider(session: makeMockURLSession(capture: capture))
+
+        let result = try await provider.transcribe(
+            request: SpeechTranscriptionRequest(
+                clip: RecordedAudioClip(
+                    id: UUID(),
+                    fileURL: clipURL,
+                    duration: 2.8,
+                    sampleRate: 16_000,
+                    createdAt: Date()
+                ),
+                lane: .directDictation,
+                contextSummary: "test"
+            ),
+            configuration: makeDashScopeSpeechConfiguration(),
+            apiKey: "dashscope-key"
+        )
+
+        XCTAssertEqual(result.transcript, "这是一次中文长句测试。")
+        XCTAssertEqual(capture.recordedBodies.count, 2)
+        XCTAssertNil(extractDashScopeLanguageHint(from: capture.recordedBodies[0]))
+        XCTAssertEqual(extractDashScopeLanguageHint(from: capture.recordedBodies[1]), "zh")
+    }
+
+    func testDashScopeProviderFailsWhenLowSignalTranscriptPersistsAfterChineseHintRetry() async throws {
+        let directory = makeTemporaryDirectory()
+        let clipURL = directory.appendingPathComponent("clip.wav")
+        try Data("fake wav".utf8).write(to: clipURL)
+
+        let capture = MockHTTPExchangeCapture(responses: [
+            .ok("""
+            {
+              "output": {
+                "choices": [
+                  {
+                    "message": {
+                      "role": "assistant",
+                      "content": [
+                        { "text": "Thank you." }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+            """),
+            .ok("""
+            {
+              "output": {
+                "choices": [
+                  {
+                    "message": {
+                      "role": "assistant",
+                      "content": [
+                        { "text": "嗯。" }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+            """)
+        ])
+        let provider = DashScopeQwenASRProvider(session: makeMockURLSession(capture: capture))
+
+        do {
+            _ = try await provider.transcribe(
+                request: SpeechTranscriptionRequest(
+                    clip: RecordedAudioClip(
+                        id: UUID(),
+                        fileURL: clipURL,
+                        duration: 3.2,
+                        sampleRate: 16_000,
+                        createdAt: Date()
+                    ),
+                    lane: .directDictation,
+                    contextSummary: "test"
+                ),
+                configuration: makeDashScopeSpeechConfiguration(),
+                apiKey: "dashscope-key"
+            )
+            XCTFail("Expected low-signal transcript to fail.")
+        } catch let error as SpeechTranscriptionError {
+            guard case let .providerFailure(description) = error else {
+                XCTFail("Unexpected error: \(error)")
+                return
+            }
+            XCTAssertTrue(description.contains("识别结果异常"))
+            XCTAssertEqual(capture.recordedBodies.count, 2)
+            XCTAssertEqual(extractDashScopeLanguageHint(from: capture.recordedBodies[1]), "zh")
+        }
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suiteName = "PulseTypeTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -668,6 +809,35 @@ final class PulseTypeCoreTests: XCTestCase {
             modelName: "deepseek-v4-flash",
             baseURL: URL(string: "https://api.deepseek.com")!
         )
+    }
+
+    private func makeDashScopeSpeechConfiguration() -> SpeechProviderConfiguration {
+        SpeechProviderConfiguration(
+            profileID: defaultASRCredentialKeyRef,
+            providerType: .dashScopeQwenASR,
+            providerName: "阿里云 Qwen ASR",
+            modelName: "qwen3-asr-flash",
+            baseURL: URL(string: "https://dashscope.aliyuncs.com")!
+        )
+    }
+
+    private func makeMockURLSession(capture: MockHTTPExchangeCapture) -> URLSession {
+        MockURLProtocol.capture = capture
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+
+    private func extractDashScopeLanguageHint(from body: String) -> String? {
+        guard
+            let data = body.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let parameters = object["parameters"] as? [String: Any],
+            let asrOptions = parameters["asr_options"] as? [String: Any]
+        else {
+            return nil
+        }
+        return asrOptions["language"] as? String
     }
 
     private static let musicToolManifest = AgentToolManifest(
@@ -884,6 +1054,93 @@ final class FakeTextGenerationProvider: TextGenerationProvider, @unchecked Senda
             outputText: selectedOutput
         )
     }
+}
+
+final class MockHTTPExchangeCapture: @unchecked Sendable {
+    enum MockResponse {
+        case ok(String)
+    }
+
+    private let lock = NSLock()
+    private var remainingResponses: [MockResponse]
+    private(set) var recordedBodies: [String] = []
+
+    init(responses: [MockResponse]) {
+        self.remainingResponses = responses
+    }
+
+    func dequeueResponse(for request: URLRequest) -> (HTTPURLResponse, Data) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        recordedBodies.append(Self.bodyString(from: request))
+
+        let response = remainingResponses.isEmpty ? .ok("{}") : remainingResponses.removeFirst()
+        switch response {
+        case let .ok(payload):
+            let url = request.url ?? URL(string: "https://example.invalid")!
+            let http = HTTPURLResponse(
+                url: url,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (http, Data(payload.utf8))
+        }
+    }
+
+    private static func bodyString(from request: URLRequest) -> String {
+        if let body = request.httpBody, let text = String(data: body, encoding: .utf8) {
+            return text
+        }
+
+        guard let stream = request.httpBodyStream else {
+            return ""
+        }
+
+        stream.open()
+        defer { stream.close() }
+
+        var data = Data()
+        let bufferSize = 4096
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        while stream.hasBytesAvailable {
+            let readCount = stream.read(&buffer, maxLength: bufferSize)
+            if readCount > 0 {
+                data.append(buffer, count: readCount)
+            } else {
+                break
+            }
+        }
+
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+}
+
+final class MockURLProtocol: URLProtocol {
+    static var capture: MockHTTPExchangeCapture?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let capture = Self.capture else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        let (response, data) = capture.dequeueResponse(for: request)
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 
 final class FakeAgentCalendarScriptRunner: AgentCalendarScriptRunning, @unchecked Sendable {

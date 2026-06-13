@@ -33,6 +33,50 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-06-13 14:26 - 强制分离普通听写与 Agent 热键，并补充会话起止来源诊断
+
+- 本次任务：继续处理“长段正常口述却只得到乱七八糟短结果”的大故障，把用户当前机器上的危险热键配置自动纠正，并补齐会话层诊断证据。
+- 改了哪些文件：
+  - `Sources/Core/Hotkey/HotkeyStateStore.swift`
+  - `Sources/Core/Hotkey/GlobalHotkeyService.swift`
+  - `Sources/Core/Interaction/InteractionCoordinator.swift`
+  - `Sources/UI/SettingsView.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 启动时自动检查 `wake` 和 `agent` 是否绑定到同一颗修饰键；如果重复，立即把 Agent 键迁移到独立键位，当前机器已从 `rightShift/rightShift` 自动修正为 `rightShift/rightCommand`。
+  - 阻止用户再把普通听写和 Agent 绑到同一颗键上，避免“普通听写开始/结束”和“Agent 长按触发”互相打架。
+  - 首页和设置页文案改成明确说明：普通听写和 Agent 使用独立按键，不再误导用户以为两者可以安全共用。
+  - `speech-pipeline.log` 新增会话开始来源、录音停止触发来源等细节，后续可以直接区分是轻点结束、按住松开结束，还是别的路径。
+  - 新增测试覆盖老配置自动迁移和“禁止同键位”的规则。
+- 为什么这样改：
+  - 真实用户偏好里，`hotkeys.wake.modifier.v1` 和 `hotkeys.agent.modifier.v1` 都是 `rightShift`，这和界面上的“轻点开始/结束说话”以及“长按触发 Agent”形成冲突，极易导致短录音、误停或误操作。
+  - 日志已经证明最近几次失败样本只有 2 到 3 秒，说明至少有一部分问题根源不在文本整理模型，而在会话触发和停止层。
+- 影响了哪些模块：
+  - 热键配置持久化、热键运行时触发、录音停止诊断、设置页提示、核心回归测试。
+
+### 2026-06-13 14:08 - DashScope ASR 增加可疑结果中文重试与拒绝脏结果写回
+
+- 本次任务：继续深挖“普通听写无论说什么都乱输出”的问题，处理新包里仍会把正常说话打成 `嗯。`、`Thank you.` 这类低质量结果的故障。
+- 改了哪些文件：
+  - `Sources/Core/Speech/DashScopeSupport.swift`
+  - `Sources/Core/Speech/OpenAITranscriptionProvider.swift`
+  - `Sources/Core/Speech/SpeechConnectionTesters.swift`
+  - `Sources/Core/Interaction/InteractionCoordinator.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 给 DashScope ASR 增加 `language` 可选参数支持，并在识别结果明显可疑时自动补发一次 `language=zh` 的重试请求。
+  - 新增低信号结果判定规则：针对“长录音却只回极短文本”“只回 `嗯。` / `Thank you.` 这类低信息短句”等场景，不再直接当成成功结果往下游传。
+  - 如果中文重试后仍然只有明显不可信的短结果，直接把本次识别判为失败，阻止垃圾文本继续写进目标应用和历史。
+  - 扩充 `speech-pipeline.log` 的成功日志，新增 transcript 预览片段，后续排查时能直接看见 ASR 实际返回了什么。
+  - 新增两条回归测试，覆盖“首次低质量英文短句，中文重试后恢复正常”和“中文重试后仍然低质量时必须失败”。
+- 为什么这样改：
+  - 机器上的真实历史已经证明，当前问题不只是一开始那个“提示词回显”老 bug；新包运行后，ASR 仍会把正常录音误识别成极短 filler 或英语礼貌短句。
+  - 这种结果继续交给 DeepSeek 只会原样写出去，所以必须在 ASR 层先做质量闸门和二次尝试，而不是等文本整理模型背锅。
+- 影响了哪些模块：
+  - DashScope ASR 请求构造、普通听写的 ASR 成功判定、诊断日志可观测性、核心单元测试。
+
 ### 2026-06-13 13:40 - 修复普通听写把内部提示词当成转写结果，并补回旧历史模式兼容
 
 - 本次任务：深度排查“普通语言转写时无论说什么都只得到固定提示词”的故障，同时调查覆盖安装后历史记录丢失的问题并修复可确认的代码根因。

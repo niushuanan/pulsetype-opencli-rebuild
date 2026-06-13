@@ -179,6 +179,7 @@ final class HotkeyStateStore: ObservableObject {
         self.cancelShortcutRegistered = false
         self.lastUpdatedAt = now()
 
+        normalizeWakeAndAgentModifiersIfNeeded()
         refresh()
 
         notificationCenter.publisher(for: Self.shortcutDidChangeNotification)
@@ -208,6 +209,7 @@ final class HotkeyStateStore: ObservableObject {
         case .wakeSession:
             wakeTriggerMode = mode
             defaults.set(mode.rawValue, forKey: wakeModeStorageKey)
+            normalizeWakeAndAgentModifiersIfNeeded()
         case .cancelSession:
             _ = mode
             if isCancelShortcutEnabled {
@@ -224,6 +226,10 @@ final class HotkeyStateStore: ObservableObject {
     func setModifier(_ modifier: HotkeyModifier, for name: KeyboardShortcuts.Name) -> Bool {
         switch name {
         case .wakeSession:
+            guard allowsWakeModifier(modifier) else {
+                refresh(changeMessage: "开始/结束说话和 Agent 不能使用同一颗键。")
+                return false
+            }
             wakeModifier = modifier
             defaults.set(modifier.rawValue, forKey: wakeModifierStorageKey)
         case .cancelSession:
@@ -238,6 +244,10 @@ final class HotkeyStateStore: ObservableObject {
 
     @discardableResult
     func setAgentModifier(_ modifier: HotkeyModifier) -> Bool {
+        guard allowsAgentModifier(modifier) else {
+            refresh(changeMessage: "Agent 必须使用独立按键，避免误触普通听写。")
+            return false
+        }
         agentModifier = modifier
         defaults.set(modifier.rawValue, forKey: agentModifierStorageKey)
         refresh(changeMessage: "Agent 触发键已更新。")
@@ -301,6 +311,24 @@ final class HotkeyStateStore: ObservableObject {
         KeyboardShortcuts.setShortcut(fixedCancelShortcut, for: .cancelSession)
     }
 
+    private func normalizeWakeAndAgentModifiersIfNeeded() {
+        guard wakeTriggerMode == .modifierTap, wakeModifier == agentModifier else {
+            return
+        }
+        let fallback = Self.recommendedAgentModifier(excluding: wakeModifier)
+        agentModifier = fallback
+        defaults.set(fallback.rawValue, forKey: agentModifierStorageKey)
+        latestChangeMessage = "检测到 Agent 键和开始键重复，已自动改成 \(fallback.displayName)。"
+    }
+
+    private func allowsWakeModifier(_ modifier: HotkeyModifier) -> Bool {
+        !(wakeTriggerMode == .modifierTap && modifier == agentModifier)
+    }
+
+    private func allowsAgentModifier(_ modifier: HotkeyModifier) -> Bool {
+        !(wakeTriggerMode == .modifierTap && modifier == wakeModifier)
+    }
+
     private static func loadModifier(defaults: UserDefaults, key: String, fallback: HotkeyModifier) -> HotkeyModifier {
         if let raw = defaults.string(forKey: key) {
             if let modifier = HotkeyModifier(rawValue: raw) {
@@ -311,5 +339,19 @@ final class HotkeyStateStore: ObservableObject {
             }
         }
         return fallback
+    }
+
+    private static func recommendedAgentModifier(excluding wakeModifier: HotkeyModifier) -> HotkeyModifier {
+        let candidates: [HotkeyModifier] = [
+            .rightCommand,
+            .leftCommand,
+            .rightOption,
+            .leftOption,
+            .rightControl,
+            .leftControl,
+            .leftShift,
+            .rightShift
+        ]
+        return candidates.first(where: { $0 != wakeModifier }) ?? .rightCommand
     }
 }

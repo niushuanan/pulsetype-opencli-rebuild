@@ -226,6 +226,10 @@ struct DashScopeQwenASRProvider: SpeechTranscriptionProvider {
 
     private let session: URLSession
 
+    private struct RequestOptions {
+        let languageHint: String?
+    }
+
     init(session: URLSession = .shared) {
         self.session = session
     }
@@ -252,11 +256,82 @@ struct DashScopeQwenASRProvider: SpeechTranscriptionProvider {
             throw SpeechTranscriptionError.providerFailure(description: "无法读取录音文件。")
         }
 
+        let firstResult = try await requestTranscript(
+            configuration: configuration,
+            apiKey: normalizedKey,
+            format: format,
+            audioData: audioData,
+            requestOptions: RequestOptions(languageHint: nil)
+        )
+
+        guard DashScopeTranscriptGuard.shouldRetryWithChineseHint(
+            transcript: firstResult.transcript,
+            audioDuration: request.clip.duration
+        ) else {
+            return firstResult
+        }
+
+        do {
+            let retriedResult = try await requestTranscript(
+                configuration: configuration,
+                apiKey: normalizedKey,
+                format: format,
+                audioData: audioData,
+                requestOptions: RequestOptions(languageHint: "zh")
+            )
+
+            if DashScopeTranscriptGuard.shouldRejectAfterChineseHintRetry(
+                transcript: retriedResult.transcript,
+                audioDuration: request.clip.duration
+            ) {
+                throw SpeechTranscriptionError.providerFailure(
+                    description: DashScopeTranscriptGuard.suspiciousTranscriptFailureMessage(
+                        originalTranscript: firstResult.transcript,
+                        retriedTranscript: retriedResult.transcript,
+                        audioDuration: request.clip.duration
+                    )
+                )
+            }
+
+            return retriedResult
+        } catch let error as SpeechTranscriptionError {
+            if DashScopeTranscriptGuard.shouldRejectAfterChineseHintRetry(
+                transcript: firstResult.transcript,
+                audioDuration: request.clip.duration
+            ) {
+                switch error {
+                case .cancelled:
+                    throw error
+                default:
+                    throw SpeechTranscriptionError.providerFailure(
+                        description: DashScopeTranscriptGuard.suspiciousTranscriptFailureMessage(
+                            originalTranscript: firstResult.transcript,
+                            retriedTranscript: nil,
+                            audioDuration: request.clip.duration
+                        )
+                    )
+                }
+            }
+            return firstResult
+        }
+    }
+
+    private func parseTranscript(from data: Data) -> String {
+        DashScopeResponseParser.transcript(from: data)
+    }
+
+    private func requestTranscript(
+        configuration: SpeechProviderConfiguration,
+        apiKey: String,
+        format: DashScopeAudioFormat,
+        audioData: Data,
+        requestOptions: RequestOptions
+    ) async throws -> SpeechTranscriptionResult {
         let endpoint = DashScopeEndpointResolver.generationURL(baseURL: configuration.baseURL)
         var urlRequest = URLRequest(url: endpoint)
         urlRequest.httpMethod = "POST"
         urlRequest.timeoutInterval = 70
-        urlRequest.setValue("Bearer \(normalizedKey)", forHTTPHeaderField: "Authorization")
+        urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let payload = DashScopeASRPayload(
@@ -278,7 +353,10 @@ struct DashScopeQwenASRProvider: SpeechTranscriptionProvider {
             ),
             parameters: .init(
                 resultFormat: "message",
-                asrOptions: .init(enableITN: false)
+                asrOptions: .init(
+                    language: requestOptions.languageHint,
+                    enableITN: false
+                )
             )
         )
 
@@ -327,10 +405,6 @@ struct DashScopeQwenASRProvider: SpeechTranscriptionProvider {
             modelName: configuration.modelName,
             transcript: transcript
         )
-    }
-
-    private func parseTranscript(from data: Data) -> String {
-        DashScopeResponseParser.transcript(from: data)
     }
 }
 

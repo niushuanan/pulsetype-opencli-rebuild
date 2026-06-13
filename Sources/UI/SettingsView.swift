@@ -84,7 +84,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 pageTitleText(
                     "首页",
-                    subtitle: "单键开口即写，长按可触发 Agent 执行，语音转写与动作结果都能快速回传。"
+                    subtitle: "轻点或按住开始普通听写，独立长按键触发 Agent，语音转写与动作结果都能快速回传。"
                 )
                 homeProductIntroCard
                 metricsGrid
@@ -100,9 +100,9 @@ struct SettingsView: View {
             Text("核心特点")
                 .font(PulseUI.Typography.sectionTitle)
 
-            Label("单键开始/结束说话：轻点触发，按住说话，松开后自动结束。", systemImage: "keyboard")
+            Label("普通听写：轻点开始或结束；按住开始听写，松开后自动结束。", systemImage: "keyboard")
                 .font(PulseUI.Typography.body)
-            Label("Agent：长按一句话执行音乐、日历。", systemImage: "sparkles")
+            Label("Agent：使用独立按键长按一句话执行音乐、日历。", systemImage: "sparkles")
                 .font(PulseUI.Typography.body)
             Label("ASR + 文本整理双模型：先转写，再把口述整理成可直接发送的成稿。", systemImage: "waveform.and.magnifyingglass")
                 .font(PulseUI.Typography.body)
@@ -323,7 +323,7 @@ struct SettingsView: View {
 
             HStack {
                 Spacer()
-                Text("长按触发，松开后执行 Music 指令；可与开始/结束说话共用同一键位（轻点/长按自动区分）。")
+                Text("Agent 需要独立按键；长按触发，松开后执行 Music 指令，避免误停普通听写。")
                     .font(PulseUI.Typography.caption)
                     .pulseSecondaryText()
             }
@@ -354,7 +354,7 @@ struct SettingsView: View {
     private var homeInstructionText: String {
         switch hotkeyStateStore.wakeTriggerMode {
         case .modifierTap:
-            return "轻点 \(hotkeyStateStore.wakeModifier.displayName) 开始或停止；按住说话，松开后会自动结束并继续处理。"
+            return "轻点 \(hotkeyStateStore.wakeModifier.displayName) 开始或停止普通听写；按住该键说话，松开后自动结束。Agent 请长按 \(hotkeyStateStore.agentModifier.displayName)。"
         case .shortcut:
             return "按 \(hotkeyStateStore.wakeShortcutText) 开始或停止，ASR 识别后由文字模型整理并写入当前应用。"
         }
@@ -363,7 +363,7 @@ struct SettingsView: View {
     private var hotkeySectionSubtitle: String {
         switch hotkeyStateStore.wakeTriggerMode {
         case .modifierTap:
-            return "轻点开始或停止；按住说话，松开后自动结束。取消仍然是 Esc。"
+            return "\(hotkeyStateStore.wakeModifier.displayName) 负责普通听写；\(hotkeyStateStore.agentModifier.displayName) 长按触发 Agent。取消仍然是 Esc。"
         case .shortcut:
             return "只保留开始/停止听写和取消会话。"
         }

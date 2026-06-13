@@ -176,7 +176,7 @@ struct ASRConnectionTester {
                     ),
                     parameters: .init(
                         resultFormat: "message",
-                        asrOptions: .init(enableITN: false)
+                        asrOptions: .init(language: nil, enableITN: false)
                     )
                 )
             )
