@@ -33,6 +33,26 @@ PulseType 是一个 macOS 普通语音输入法。当前项目只保留一条主
 - `Sources/UI/StatusPulseHUDController.swift`：语音小条 HUD 入口。
 
 ## 最近改了什么
+### 2026-06-13 13:40 - 修复普通听写把内部提示词当成转写结果，并补回旧历史模式兼容
+
+- 本次任务：深度排查“普通语言转写时无论说什么都只得到固定提示词”的故障，同时调查覆盖安装后历史记录丢失的问题并修复可确认的代码根因。
+- 改了哪些文件：
+  - `Sources/Core/Speech/DashScopeSupport.swift`
+  - `Sources/Core/Speech/OpenAITranscriptionProvider.swift`
+  - `Sources/Core/History/LocalHistoryStore.swift`
+  - `Tests/PulseTypeCoreTests.swift`
+  - `PROJECT_CONTEXT.md`
+- 改了什么：
+  - 给 DashScope ASR 响应解析加了“内部 system prompt 回显过滤”，如果返回里混入 `请把音频转写成简体中文文本，只返回转写结果。`，会先丢掉这段再提取真实 transcript；如果返回里只剩这句提示词，则直接当成空结果，避免脏数据继续写进历史和目标应用。
+  - 把 `DashScopeQwenASRProvider` 发往 `qwen3-asr-flash` 的 system prompt 改成空串，减少 provider 在边缘情况下把内部提示词原样回显的风险。
+  - 修复 `LocalHistoryStore` 读取旧历史时“只要 mode 不是当前支持值就直接丢弃”的逻辑；现在遇到旧版本遗留的未知 mode，会保留原记录并按 `dictation` 兼容解码，不再因为一次升级把老记录静默吞掉。
+  - 新增测试，覆盖三类场景：DashScope 返回“提示词 + 真转写”时应只保留真转写；只返回提示词时应判空；旧历史文件里带 legacy mode 时应继续保留并参与统计。
+- 为什么这样改：
+  - 真实运行日志已经证明问题不是后处理 prompt 写错，而是 ASR provider 在部分请求里把内部提示词当成了 transcript；如果不在解析层和请求层同时兜住，这类脏结果会继续污染写回和历史。
+  - 用户反馈“本地编译覆盖后很多记录丢失”与代码里原本存在的历史过滤逻辑一致：旧 mode 会在加载时被扔掉，后续保存还会覆盖原文件，所以必须先修兼容逻辑，至少阻止继续丢。
+- 影响了哪些模块：
+  - DashScope ASR 请求与响应解析、普通听写主链、历史读取兼容、历史统计、核心测试。
+
 ### 2026-05-18 15:20 - 彻底移除闹钟能力
 
 - 本次任务：按用户要求把 PulseType 里的闹钟能力完整删除，不再保留开关、路由、执行器和测试。

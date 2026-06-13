@@ -275,15 +275,16 @@ final class LocalHistoryStore: ObservableObject {
 
         if let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             return array.compactMap { raw in
+                var normalizedRaw = raw
                 if let mode = raw["mode"] as? String {
                     let normalized = mode.trimmingCharacters(in: .whitespacesAndNewlines)
                     if normalized != SessionHistoryMode.dictation.rawValue,
                        normalized != SessionHistoryMode.agent.rawValue
                     {
-                        return nil
+                        normalizedRaw["mode"] = SessionHistoryMode.dictation.rawValue
                     }
                 }
-                guard let itemData = try? JSONSerialization.data(withJSONObject: raw) else {
+                guard let itemData = try? JSONSerialization.data(withJSONObject: normalizedRaw) else {
                     return nil
                 }
                 return try? jsonDecoder.decode(SessionHistoryEntry.self, from: itemData)

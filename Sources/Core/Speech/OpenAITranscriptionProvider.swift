@@ -263,7 +263,9 @@ struct DashScopeQwenASRProvider: SpeechTranscriptionProvider {
             model: configuration.modelName,
             input: .init(
                 messages: [
-                    .init(role: "system", content: [.text("请把音频转写成简体中文文本，只返回转写结果。")]),
+                    // DashScope 的音频转写在无 system prompt 时也能正常识别。
+                    // 这里留空，避免极端情况下把内部提示词回显成转写结果。
+                    .init(role: "system", content: [.text("")]),
                     .init(
                         role: "user",
                         content: [

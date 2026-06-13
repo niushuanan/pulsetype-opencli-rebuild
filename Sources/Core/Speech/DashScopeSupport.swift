@@ -102,6 +102,10 @@ struct DashScopeBusinessError: Equatable {
 }
 
 enum DashScopeResponseParser {
+    private static let ignoredTranscriptEchoes: Set<String> = [
+        "请把音频转写成简体中文文本，只返回转写结果。"
+    ]
+
     static func transcript(from data: Data) -> String {
         if
             let payload = try? JSONDecoder().decode(DashScopeASRResponse.self, from: data),
@@ -194,14 +198,15 @@ enum DashScopeResponseParser {
                 if let content = choice.message?.content {
                     switch content {
                     case let .string(text):
-                        return text
+                        return normalizeTranscriptCandidate(text)
                     case let .items(items):
-                        return items.compactMap(\.text).joined(separator: "\n")
+                        let fragments = items.compactMap(\.text).compactMap(normalizeTranscriptCandidate)
+                        return fragments.isEmpty ? nil : fragments.joined(separator: "\n")
                     case .empty:
-                        return choice.text
+                        return normalizeTranscriptCandidate(choice.text)
                     }
                 }
-                return choice.text
+                return normalizeTranscriptCandidate(choice.text)
             }
         )
     }
@@ -242,11 +247,22 @@ enum DashScopeResponseParser {
     private static func uniqueNonEmpty(_ values: [String]) -> [String] {
         var seen = Set<String>()
         return values
-            .compactMap {
-                let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : trimmed
-            }
+            .compactMap(normalizeTranscriptCandidate)
             .filter { seen.insert($0).inserted }
+    }
+
+    private static func normalizeTranscriptCandidate(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        guard !ignoredTranscriptEchoes.contains(trimmed) else {
+            return nil
+        }
+        return trimmed
     }
 
     private static func normalizeText(_ value: Any?) -> String? {

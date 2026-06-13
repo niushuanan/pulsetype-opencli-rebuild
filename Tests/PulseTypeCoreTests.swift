@@ -65,7 +65,7 @@ final class PulseTypeCoreTests: XCTestCase {
         XCTAssertFalse(AgentCapabilitySettings.isCalendarCreateEventEnabled(defaults: defaults))
     }
 
-    func testHistoryStoreKeepsSupportedModesFromOldFiles() throws {
+    func testHistoryStorePreservesLegacyModesFromOldFiles() throws {
         let directory = makeTemporaryDirectory()
         let file = directory.appendingPathComponent("session-history-v2.json")
         let payload = """
@@ -108,11 +108,14 @@ final class PulseTypeCoreTests: XCTestCase {
 
         let store = LocalHistoryStore(historyDirectory: directory)
 
-        XCTAssertEqual(store.entries.count, 2)
-        XCTAssertEqual(store.entries.map(\.mode), [.agent, .dictation])
+        XCTAssertEqual(store.entries.count, 3)
+        XCTAssertEqual(store.entries.map(\.mode), [.dictation, .agent, .dictation])
         XCTAssertEqual(store.entries.last?.inputText, "asr raw")
         XCTAssertEqual(store.entries.last?.outputText, "final text")
-        XCTAssertEqual(store.lifetimeSnapshot.totalInputCharacters, "final text".count)
+        XCTAssertEqual(
+            store.lifetimeSnapshot.totalInputCharacters,
+            "final text".count + "old output".count
+        )
     }
 
     func testHistoryLifetimeStatsEstimateManualTypingTimeFromTimedEntriesOnly() {
@@ -594,6 +597,53 @@ final class PulseTypeCoreTests: XCTestCase {
 
         coordinator.handleCancelInput()
         XCTAssertEqual(historyStore.entries.count, 1)
+    }
+
+    func testDashScopeResponseParserDropsEchoedSystemPromptWhenTranscriptExists() {
+        let payload = """
+        {
+          "output": {
+            "choices": [
+              {
+                "message": {
+                  "role": "assistant",
+                  "content": [
+                    { "text": "请把音频转写成简体中文文本，只返回转写结果。" },
+                    { "text": "真实转写结果" }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+        """
+
+        let transcript = DashScopeResponseParser.transcript(from: Data(payload.utf8))
+
+        XCTAssertEqual(transcript, "真实转写结果")
+    }
+
+    func testDashScopeResponseParserRejectsPromptOnlyEcho() {
+        let payload = """
+        {
+          "output": {
+            "choices": [
+              {
+                "message": {
+                  "role": "assistant",
+                  "content": [
+                    { "text": "请把音频转写成简体中文文本，只返回转写结果。" }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+        """
+
+        let transcript = DashScopeResponseParser.transcript(from: Data(payload.utf8))
+
+        XCTAssertEqual(transcript, "")
     }
 
     private func makeDefaults() -> UserDefaults {
